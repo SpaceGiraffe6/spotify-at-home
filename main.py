@@ -6,9 +6,8 @@ from threading import Thread
 from random import randint
 from difflib import get_close_matches
 
-
 from song import Song
-from info import Modifiers, Colors, SONG_LENGTHS, SEQUENCES, EXCLUSIVE_MODIFIERS
+from info import Modifiers, Colors, SEQUENCES, EXCLUSIVE_MODIFIERS
 
 # Converts the number of seconds into a str in mm:ss format
 def to_minutes_str(seconds:int) -> str:
@@ -568,7 +567,7 @@ class spotify:
         disabled_set:set[str] = set(self.modifiers[Modifiers.disabled])
 
         available_songs:set[str] = set(self.song_names) - disabled_set - set(self.modifiers[Modifiers.synced])
-        if len(available_songs) - len(self.songs_on_cooldown) > 0:
+        if len(available_songs) - len(self.songs_on_cooldown) > 0: # Just in case there are too many songs on cooldown (should be prevented by the cap on cooldown songs set in the constructor)
             available_songs -= set(self.songs_on_cooldown)
         available_songs:list[str] = list(available_songs) + list(self.synced_songs.keys())
 
@@ -576,11 +575,12 @@ class spotify:
             available_songs += self.modifiers[Modifiers.hot] * self.RATE_CHANGE
             song_name:str = None
             while not song_name:
+                # The synced songs in available_songs have been replaced by the keys in self.synced_songs
                 song_name:str = available_songs[randint(0, len(available_songs) - 1)]
 
                 if song_name in self.synced_songs.keys():
                     valid_variations:list[str] = list(set(self.synced_songs[song_name]) - disabled_set)
-                    if len(valid_variations) > 0:
+                    if len(valid_variations) > 0: # If this list of synced songs is not empty
                         song_name = valid_variations[randint(0, len(valid_variations) - 1)]
                     else:
                         continue
@@ -590,7 +590,7 @@ class spotify:
 
             self.curr_song_index = self.song_names.index(song_name) # Adjust for changes in song indexes when the cooldown songs got removed
         else:
-            self.curr_song_index = 0
+            self.curr_song_index = self.song_names.index(available_songs[0])
         
         self.curr_song = self.songs[self.song_names[self.curr_song_index]]
 
@@ -672,10 +672,10 @@ class spotify:
             if self.exit_later:
                 self.stop()
                 return
+            
+            self.curr_song.play() # Plays the song in the same thread as this method
 
-            self.curr_song.play() # Plays song in the same thread as this method
-
-            buffer:float = 0.5 # If the song was paused, wait a little for pause() to set self.playing to false before checking
+            buffer:float = 0.5 # If the song was paused, wait a little for pause() to set self.playing to false before checking self.playing
             wait(buffer)
             if self.playing: # If this song has ended naturally and not because the user paused the player
                 wait(self.COOLDOWN_BETWEEN_SONGS - buffer)
@@ -1202,7 +1202,14 @@ DIRECTORY:str = "songs/" # Every file in this directory must be a playable wav f
 songs:"dict[str, Song]" = {}
 song_names:"list[str]" = []
 alert:bool = False
-for file_name in listdir(DIRECTORY):
+file_names:"list[str]" = listdir(DIRECTORY)
+songs_instructions_file_name:str = "read_this.txt" # This text file must be in the "songs" directory
+try:
+    file_names.remove(songs_instructions_file_name)
+except:
+    print("Instructions file not found in songs!")
+
+for file_name in file_names:
     if file_name[len(file_name) - 4 : ] != ".wav":
         alert = True
         print(color(f"The file \"{file_name}\"\'s name doesn't end with \".wav\", but it was added to the playlist anyways", Colors.yellow))
@@ -1225,10 +1232,7 @@ for file_name in listdir(DIRECTORY):
         alert = True
         print(color(f"{file_name} dropped due to name overlap with existing command!", Colors.red))
     else:
-        if song_name in SONG_LENGTHS.keys():
-            songs[song_name] = Song(song_name, f"{DIRECTORY}{file_name}", SONG_LENGTHS[song_name])
-        else:
-            songs[song_name] = Song(song_name, f"{DIRECTORY}{file_name}")
+        songs[song_name] = Song(song_name, f"{DIRECTORY}{file_name}")
 
     song_names.append(song_name)
 
@@ -1252,7 +1256,7 @@ player = spotify(songs, song_names)
 def play():
     while True:
         if player.playing:
-            player.play_next_song() # Yields (almost) immediately when the player gets paused
+            player.play_next_song() # Yields within 1.5 seconds after the player is paused
             # If the user uses delayed exit, player.stop() called in play_next_song() will only kill this song-playing thread
         else:
             wait(0.5) # Wait and check whether the user has resumed the player

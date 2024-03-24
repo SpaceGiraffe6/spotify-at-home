@@ -1,5 +1,7 @@
 from winsound import PlaySound, SND_ASYNC
+from math import ceil
 from time import sleep as wait, time
+from wave import open as open_wav
 
 from info import Modifiers
 # time: a string representing a time in mm:ss.ss format
@@ -17,10 +19,10 @@ class Song:
         
         self.song_name:str = song_name
 
-        self.duration:int = seconds_duration
-        self.curr_duration:int = None
-        if seconds_duration: # Initialize before playing if duration is available, so the ui won't show "None" when the song first starts to play
-            self.curr_duration = 0
+        with open_wav(file_name, "r") as file:
+            self.duration = ceil(file.getnframes() / file.getframerate())
+
+        self.curr_duration:int = 0
         self.start_time = None
 
         # KEYS IN attributes MUST MATCH KEYS IN enabled_colors IN spotify.list_actions
@@ -69,16 +71,15 @@ class Song:
 
     # Call in a separate thread/process
     def start_timer(self) -> None:
-        if self.duration: # self.duration will be None if no duration has been passed into the constructor
-            self.curr_duration = 0
-            self.start_time = time()
+        self.curr_duration = 0
+        self.start_time = time()
 
-            while self.curr_duration < self.duration: # Checks roughly every second
-                if self.player.playing == True:
-                    while time() - self.start_time <= self.curr_duration: # curr_duration will be ahead of the actual duration by between 0-1 seconds
-                        wait(0.1)
-                    self.curr_duration += 1
+        while self.curr_duration < self.duration: # Loops roughly every second
+            if self.player.playing == True:
+                while time() - self.start_time <= self.curr_duration: # curr_duration will be ahead of the actual duration by between 0-1 seconds
+                    wait(0.2)
+                self.curr_duration += 1
 
-                else:
-                    self.curr_duration -= 1
-                    break
+            else:
+                self.curr_duration -= 1
+                break
