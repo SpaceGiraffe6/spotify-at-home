@@ -1,0 +1,6 @@
+# Ignore all .wav files under songs
+songs/.wav
+
+# Ignore all files under lyrics except read_this.txt
+lyrics/**
+!read_this.txt
