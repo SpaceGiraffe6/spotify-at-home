@@ -69,7 +69,7 @@ class Song:
 
         self.attributes["playing"] = False
 
-    # Call in a separate thread/process
+    # Don't call from the main thread
     def start_timer(self) -> None:
         self.curr_duration = 0
         self.start_time = time()

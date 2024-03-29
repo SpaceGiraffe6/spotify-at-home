@@ -1,6 +1,16 @@
 # Ignore all .wav files under songs
-songs/.wav
+songs/*.wav
 
 # Ignore all files under lyrics except read_this.txt
 lyrics/**
 !read_this.txt
+
+# Ignore the save file
+save.file
+
+# Ignore the testing file
+testing.py
+
+# IDK what these files are but I'm too scared to delete them
+__pycache__/info.cpython-37.pyc
+__pycache__/song.cpython-37.pyc

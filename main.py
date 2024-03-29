@@ -137,11 +137,11 @@ class ListModes(Enum):
 
 
 class spotify:
-    # Static/final variables
+    # Constants
     COOLDOWN_BETWEEN_SONGS:int = 8 # Seconds
     # When the playback mode is shuffle, the minimum number of songs that would have to play between each repeat
     COOLDOWN_BETWEEN_REPEATS:int = 5 # Will be capped at len(playlist) - 1
-    RATE_CHANGE:int = 3 # Percent increase/decrease for a hot/cold song to be chosen, in decimal form. Has to be a whole number
+    RATE_CHANGE:int = 3 # Percent increase/decrease of the chances for a hot/cold song to be chosen, in decimal form. Has to be a whole number
     
     SAVE_FILE_PATH:str = "save.file"
 
@@ -234,7 +234,7 @@ class spotify:
             ListModes.Song : {
                 "header line" : "Select a command to run or a modifier to add/remove for {song_name}",
                 "special commands" : {"clear" : {"confirmation" : None, "action" : self.remove_modifier},
-                                        "enqueue" : {"confirmation" : None, "action" : self.play_next_song}},
+                                        "enqueue" : {"confirmation" : None, "action" : self.enqueue}},
                 "no results" : "No results found! Please check your spelling",
                 "disabled color keys" : [],
                 "prompt" : f"Select a modifier ({color('clear')} to clear all modifiers from this song, or {color('[space]')} to enqueue): "
@@ -302,13 +302,28 @@ class spotify:
         self.exit_later = not self.exit_later
         self.update_ui()
 
+    def enqueue(self, song_name:str = None) -> None:
+        if song_name:
+            self.queue.append(self.songs[song_name])
+            self.queue_song_names.append(song_name)
+            self.songs[song_name].attributes["queued"] = True
+
+            clear_console()
+            print(f"{color(song_name, Colors.purple)} added to queue!")
+            block_until_input()
+        else: # Enqueue a placeholder song
+            self.queue.append(None)
+            self.queue_song_names.append("*")
+            clear_console()
+
+        self.update_ui()
+
     def clear_queue(self) -> None:
         self.queue.clear()
         self.queue_song_names.clear()
         print("Queue cleared!")
 
         block_until_input()
-
         self.update_ui()
     # If only song_name is provided, then remove all occurrences of that song from the queue
     # If song_name and remove_at_occurrence are provided, then remove that occurrence of the song from the queue
@@ -610,6 +625,8 @@ class spotify:
         self.update_ui()
     def skip(self) -> None:
         self.playing = False
+        PlaySound("1s_silence.wav", SND_ASYNC)
+
         print("Picking the next song...")
         wait(1.5) # Wait for the current song's timer to stop
         self.playing = True # Resume the song-playing thread
@@ -617,7 +634,8 @@ class spotify:
         wait(0.75) # Wait for the song-playing thread to set the next song (Must be longer than the waiting time for each loop in play())
         self.update_ui()
 
-    # Repeat the current song an additional time, the repeat will not trigger additional sequences
+    # Repeat the current song an additional time
+    # the repeat will not trigger any sequences
     def encore(self) -> None:
         self.encore_activated = not self.encore_activated
 
@@ -626,58 +644,50 @@ class spotify:
 
     # Only call this function from a separate thread (if playing a song)
     # Adds a song to the queue if requested_song_name is provided
-    def play_next_song(self, song_name:str = "") -> None:
-        if song_name: # Non-song names will be filtered out by the list_results() function
-            self.queue.append(self.songs[song_name])
-            self.queue_song_names.append(song_name)
-            self.songs[song_name].attributes["queued"] = True
-
-            clear_console()
-            print(f"{color(song_name, Colors.purple)} added to queue!")
-            block_until_input()
-
-            self.update_ui()
-        else:
-            if self.encore_activated:
-                self.encore_activated = False
-                # Do nothing to curr_song and curr_song_index so the same song repeats
-            else: # Don't update the sequence if the song is an encore
-                if len(self.sequence) > 0: # Songs in the active sequence take priority over songs in the queue
-                    song:Song = self.sequence[0]
-                    del self.sequence[0]
-                    self.curr_song = song
-                    self.curr_song_index = self.song_names.index(song.song_name)
-                
-                elif len(self.queue) > 0:
-                    song:Song = self.queue[0]
-                    del self.queue[0]
-                    del self.queue_song_names[0]
-                    if song.song_name not in self.queue_song_names:
+    def play_next_song(self) -> None:
+        if self.encore_activated:
+            self.encore_activated = False
+            # Do nothing to curr_song and curr_song_index so the same song repeats
+        else: # Don't update the sequence if the song is an encore
+            if len(self.sequence) > 0: # Songs in the active sequence take priority over songs in the queue
+                song:Song = self.sequence[0]
+                del self.sequence[0]
+                self.curr_song = song
+                self.curr_song_index = self.song_names.index(song.song_name)
+            
+            elif len(self.queue) > 0:
+                song:Song = self.queue[0]
+                del self.queue[0]
+                del self.queue_song_names[0]
+                if song:
+                    if song.song_name not in self.queue_song_names: # In case this song was enqueued multiple times
                         song.attributes["queued"] = False
 
                     self.curr_song = song
                     self.curr_song_index = self.song_names.index(song.song_name)
-                else:
-                    mode_actions[self.mode](self) # Select the next song based on the current playback mode
+                else: # If the queued song is a placeholder
+                    mode_actions[self.mode](self)
+            else:
+                mode_actions[self.mode](self) # Select the next song based on the current playback mode
 
-                # Only activate the sequence if there is not already an active sequence
-                if (self.curr_song.song_name in SEQUENCES.keys()) and len(self.sequence) == 0:
-                    self.sequence = [self.songs[song_name]  for song_name in SEQUENCES[self.curr_song.song_name] if song_name in self.song_names]
-            
-            # Updates the songs on cooldown
-            if len(self.songs_on_cooldown) >= self.COOLDOWN_BETWEEN_REPEATS:
-                del self.songs_on_cooldown[0]
+            # Only activate the sequence if there is not already an active sequence
+            if (self.curr_song.song_name in SEQUENCES.keys()) and len(self.sequence) == 0:
+                self.sequence = [self.songs[song_name]  for song_name in SEQUENCES[self.curr_song.song_name] if song_name in self.song_names]
+        
+        # Updates the songs on cooldown
+        if len(self.songs_on_cooldown) >= self.COOLDOWN_BETWEEN_REPEATS:
+            del self.songs_on_cooldown[0]
 
-            self.save()
-            if self.exit_later:
-                self.stop()
-                return
-            
-            self.curr_song.play() # Plays the song in the same thread as this method
+        self.save()
+        if self.exit_later:
+            self.stop()
+            return
+        
+        self.curr_song.play() # Plays the song in the same thread as this method
 
-            buffer:float = 0.5 # If the song was paused, wait a little for pause() to set self.playing to false before checking self.playing
-            wait(buffer)
-            if self.playing: # If this song has ended naturally and not because the user paused the player
+        buffer:float = 0.5 # If the song was paused, wait a little for pause() to set self.playing to false before checking self.playing
+        wait(buffer)
+        if self.playing: # If this song has ended naturally and not because the user paused the player
                 wait(self.COOLDOWN_BETWEEN_SONGS - buffer)
 
     def display_help(self) -> None:
@@ -742,7 +752,7 @@ Playback modes:
                     clear_console()
                     hide_cursor()
 
-                    display_range:int = max((get_terminal_size().lines - 1) // 2, max_display_range) # How many lines before/after the current line of lyrics to display
+                    display_range:int = min((get_terminal_size().lines - 1) // 2, max_display_range) # How many lines before/after the current line of lyrics to display
                     for prev_line_index in range(i - display_range, i):
                         if prev_line_index >= 0:
                             print(color(lyrics[prev_line_index]["text"], Colors.faint), end = "")
@@ -1110,7 +1120,7 @@ Playback modes:
             return
 
         elif user_input.isspace() and list_type == ListModes.Song:
-                self.play_next_song(song_name = listing_item_name)
+                self.enqueue(song_name = listing_item_name)
                 return
 
         elif list_type == ListModes.Queue: # Checks if the user wants to remove a queued item at a specific index
@@ -1154,7 +1164,7 @@ Playback modes:
         self.mode = Modes.Shuffle
         self.update_ui()
 
-    # Call all functions in this dictionary only with the "self" argument
+    # All functions in this dictionary must be able to be called with only a "self" argument
     global valid_commands
     valid_commands = {"help" : display_help,
                         "pause" : pause,
@@ -1165,6 +1175,7 @@ Playback modes:
                         "list" : list_songs,
                         "encore" : encore,
                         "queue" : list_queue,
+                        "*" : enqueue,
                         "modifiers" : list_active_modifiers,
                         "q" : update_ui,
                         "quit" : update_ui,
@@ -1207,7 +1218,8 @@ songs_instructions_file_name:str = "read_this.txt" # This text file must be in t
 try:
     file_names.remove(songs_instructions_file_name)
 except:
-    print("Instructions file not found in songs!")
+    print(color("Instructions file not found in songs!", Colors.red))
+    alert = True
 
 for file_name in file_names:
     if file_name[len(file_name) - 4 : ] != ".wav":
