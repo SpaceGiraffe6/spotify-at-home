@@ -1,5 +1,5 @@
 Add the text files for song lyrics into this folder
 The lyrics file must have the exact same name as the name of the song file it should be paired with
 
-Each line/lyric in the file should have the following format (write "/u2669" characters for buffer lines with no lyrics):
+Each line/lyric in the file should have the following format (use "/u2669" for buffer lines with no lyrics):
 mm:ss.ss <lyric line>

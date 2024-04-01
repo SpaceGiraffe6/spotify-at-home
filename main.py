@@ -213,21 +213,21 @@ class spotify:
             ListModes.Songs : {
                 "header line" : f"Select a song to queue (or a command to run)",
                 "special commands" : {},
-                "no results" : "No songs found! Please check your spelling",
+                "no results" : {"message" : "No songs found! Please check your spelling", "action" : self.list_songs},
                 "disabled color keys" : [],
                 "prompt" : f"Enter the index or the name of the song to queue ({color('q')}/{color('quit')} to cancel): "
             },
             ListModes.Queue : {
                 "header line" : f"Select a command, or a song to remove from the queue",
                 "special commands" : {"clear" : {"confirmation" : confirmation, "action" : self.clear_queue}},
-                "no results" : "No songs found! Please check your spelling",
+                "no results" : {"message" : "No songs found! Please check your spelling", "action" : self.list_queue},
                 "disabled color keys" : ["playing"],
                 "prompt" : f"Enter the index or the name of the song to remove ({color('q')}/{color('quit')} to cancel, {color('clear')} to clear queue): "
             },
             ListModes.Modifiers : {
                 "header line" : f"Select a modifier to remove it from all songs, or select a song to remove all modifiers from that song",
                 "special commands" : {"clear" : {"confirmation" : confirmation, "action" : self.remove_modifier}},
-                "no results" : "No modifier found! Please check your spelling",
+                "no results" : {"message" : "No modifier found! Please check your spelling", "action" : self.list_active_modifiers},
                 "disabled color keys" : ["playing", "queued", "sequenced"],
                 "prompt" : f"Select a modifier to clear that modifier select a song to clear all of its modifiers ({color('clear')} to clear all modifiers): "
             },
@@ -235,14 +235,14 @@ class spotify:
                 "header line" : "Select a command to run or a modifier to add/remove for {song_name}",
                 "special commands" : {"clear" : {"confirmation" : None, "action" : self.remove_modifier},
                                         "enqueue" : {"confirmation" : None, "action" : self.enqueue}},
-                "no results" : "No results found! Please check your spelling",
+                "no results" : {"message" : "No results found! Please check your spelling", "action" : self.list_song},
                 "disabled color keys" : [],
                 "prompt" : f"Select a modifier ({color('clear')} to clear all modifiers from this song, or {color('[space]')} to enqueue): "
             },
             None : {
                 "header line" : f"Which one do you mean?",
                 "special commands" : {},
-                "no results" : "No results found! Please check your spelling",
+                "no results" : {"message" : "No results found! Please check your spelling", "action" : self.update_ui},
                 "disabled color keys" : [],
                 "prompt" : f"Enter the index or the name of the result ({color('q')}/{color('quit')} to cancel): "
             }}
@@ -372,7 +372,7 @@ class spotify:
 
         return song_name
     
-    def list_queue(self) -> None:
+    def list_queue(self, *overflow_args) -> None:
         if len(self.queue) > 0 or len(self.sequence) > 0:
             self.list_actions(["q", "quit", "clear"] + self.queue_song_names, list_type = ListModes.Queue) # Clears the console
         else:
@@ -382,7 +382,7 @@ class spotify:
 
             self.update_ui()
 
-    def list_active_modifiers(self) -> None:
+    def list_active_modifiers(self, *overflow_args) -> None:
         active_modifier_names:list[str] = [modifier.name for modifier, modifier_list in self.modifiers.items() if len(modifier_list) > 0]
         # Add the songs with modifiers
         for modifier_list in self.modifiers.values():
@@ -727,11 +727,11 @@ Playback modes:
         print()
         self.input_command(input("Enter a command: "))
 
-    def list_songs(self) -> None: # Requesting a song while another song is playing will queue the requested song instead
+    def list_songs(self, *overflow_args) -> None: # Requesting a song while another song is playing will queue the requested song instead
         self.list_actions(["q", "quit"] + self.song_names, list_type = ListModes.Songs)
 
     # Lists the commands and modifier actions for a song
-    def list_song(self, song_name:str) -> None:
+    def list_song(self, song_name:str, *overflow_args) -> None:
         results:list[str] = ["q", "quit", "enqueue", "clear"]
         results += [modifier.name for modifier in list(self.modifiers.keys())]
 
@@ -893,7 +893,7 @@ Playback modes:
     # results must be in the order of [commands, modifiers, songs]
     def list_actions(self, results:"list[str]", list_type:ListModes = None, listing_item_name:str = None) -> None:
         clear_console()
-        # KEYS IN enabled_colors MUST MATCH KEYS IN EACH SONG'S ATTRIBUTES
+        # KEYS IN enabled_colors MUST MATCH EXISTING KEYS IN EACH SONG'S ATTRIBUTES
         enabled_colors:dict[str, bool] = {"playing" : {"enabled" : True, "color" : Colors.green},
                                         "queued" : {"enabled" : True, "color" : Colors.purple},
                                         "sequenced" : {"enabled" : True, "color" : Colors.yellow},
@@ -904,29 +904,11 @@ Playback modes:
 
         # Handle cases where there are no valid results or only 1 valid result
         if len(results) == 0:
-            print(self.listing_info[list_type]["no results"])
-            if list_type == ListModes.Songs:
-                block_until_input()
-
-                self.list_songs()
-            elif list_type == ListModes.Queue:
-                block_until_input()
-
-                self.list_queue()
-            elif list_type == ListModes.Modifiers:
-                block_until_input()
-
-                self.list_active_modifiers()
-            elif list_type == ListModes.Song:
-                block_until_input()
-
-                self.list_song(listing_item_name)
-            else:
-                block_until_input()
-
-                self.update_ui()
-
+            print(self.listing_info[list_type]["no results"]["message"])
+            block_until_input()
+            self.listing_info[list_type]["no results"]["action"](listing_item_name)
             return
+            
         elif len(results) == 1:
             result:str = results[0]
                 
