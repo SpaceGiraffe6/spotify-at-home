@@ -5,6 +5,7 @@ from winsound import PlaySound, SND_ASYNC
 from threading import Thread
 from random import randint
 from difflib import get_close_matches
+from math import ceil
 
 from song import Song
 from info import Modifiers, Colors, SEQUENCES, EXCLUSIVE_MODIFIERS
@@ -45,9 +46,9 @@ def cursor_up(lines:int = 1) -> None:
 def cursor_down(lines:int = 1) -> None:
     print(f"\033[{lines}B", end = "")
 
-def block_until_input(message:str = f"{color('Press enter to continue', Colors.faint)}") -> None:
+def block_until_input(message:str = "Press enter to continue") -> None:
     hide_cursor()
-    input(message)
+    input(color(message, Colors.faint))
     show_cursor()
 def confirmation(message:str = "Are you sure?") -> bool:
     message += " (y/n): "
@@ -200,6 +201,7 @@ class spotify:
             self.synced_songs.setdefault(pure_song_name, [])
             self.synced_songs[pure_song_name].append(song_name)
 
+        self.remaining_cooldown_indicator:str = "" # Indicates how much time is left for the cooldown period between this song and the next one
         self.COOLDOWN_BETWEEN_REPEATS:int = min(len(self.song_names) - 1, self.COOLDOWN_BETWEEN_REPEATS)
         self.songs_on_cooldown:list[str] = []
 
@@ -249,7 +251,12 @@ class spotify:
 
     # Call this after the thread that plays the songs has been started
     def start(self) -> None:
-        self.update_ui()
+        if len(self.songs) > 0:
+            self.update_ui()
+        else:
+            print("No valid audio files found!")
+            block_until_input("Press enter to exit")
+            exit()
     # Updates the save file
     def save(self) -> None:
         def trim_enum_str(enum):
@@ -366,11 +373,13 @@ class spotify:
     # Returns the name of the song that was removed
     def remove_queued_item_at_index(self, index:int) -> str:
         song_name:str = self.queue_song_names[index]
-        self.queue[index].attributes["queued"] = False
-        del self.queue[index]
-        del self.queue_song_names[index]
+        try:
+            self.queue[index].attributes["queued"] = False # Will error if the song at index is a placeholder ("*")
+        finally:
+            del self.queue[index]
+            del self.queue_song_names[index]
 
-        return song_name
+            return song_name
     
     def list_queue(self, *overflow_args) -> None:
         if len(self.queue) > 0 or len(self.sequence) > 0:
@@ -644,7 +653,7 @@ class spotify:
 
     # Only call this function from a separate thread (if playing a song)
     # Adds a song to the queue if requested_song_name is provided
-    def play_next_song(self) -> None:
+    def play_next_song(self, interlude:bool = True) -> None:
         if self.encore_activated:
             self.encore_activated = False
             # Do nothing to curr_song and curr_song_index so the same song repeats
@@ -677,18 +686,30 @@ class spotify:
         # Updates the songs on cooldown
         if len(self.songs_on_cooldown) >= self.COOLDOWN_BETWEEN_REPEATS:
             del self.songs_on_cooldown[0]
+        # self.curr_song will have already been set to the next song at this point
+        if Modifiers.hot not in self.curr_song.attributes["modifiers"]:
+            self.songs_on_cooldown.append(self.curr_song.song_name)
 
         self.save()
         if self.exit_later:
             self.stop()
             return
         
-        self.curr_song.play() # Plays the song in the same thread as this method
+        if interlude: # Will be set to false when playing the first song so that everything saves BEFORE waiting and then playing each subsequent song
+            buffer:float = 0.5 # If the song was paused, wait a little for pause() to set self.playing to false before checking self.playing
+            wait(buffer)
+            if self.playing: # If this song has ended naturally and not because the user paused the player
+                self.remaining_cooldown_indicator = "-" * self.COOLDOWN_BETWEEN_SONGS
+                
+                padding:float = ceil(buffer) - buffer
+                wait(padding)
+                self.remaining_cooldown_indicator = self.remaining_cooldown_indicator[:len(self.remaining_cooldown_indicator) - 1]
+                for seconds_remaining in range(self.COOLDOWN_BETWEEN_SONGS - 1, -1, -1):
+                    wait(1)
+                    self.remaining_cooldown_indicator = "-" * seconds_remaining
 
-        buffer:float = 0.5 # If the song was paused, wait a little for pause() to set self.playing to false before checking self.playing
-        wait(buffer)
-        if self.playing: # If this song has ended naturally and not because the user paused the player
-                wait(self.COOLDOWN_BETWEEN_SONGS - buffer)
+
+        self.curr_song.play() # Plays the song in the same thread as this method
 
     def display_help(self) -> None:
         print("Available commands (in blue)")
@@ -703,26 +724,28 @@ Songs played as part of a sequence can't initiate sequences themselves""", Color
         print(color(f"""Inputs are not case sensitive
 Enter the index of a queued song from the menu to remove that song from the queue
 Press enter without typing anything to return to the menu from any screen
-The currently playing song, queue, sequence, playback mode, and active modifiers will be autosaved""", Colors.green))
+The currently playing song, queue, sequence, playback mode, and active modifiers will be autosaved
+Home screen indicators for some toggle-able commands will be listed in (parentheses) after the command""", Colors.green))
 
         print()
         # Commands
         print(f"""{color('list')}: list all of the songs in the playlist and optionally select one to queue
 {color('queue')}: list the queue and the active sequence (if any), and optionally remove a song from the queue
+    {color('*')}: enqueue a placeholder song based on the playback mode    [{color('Warning: will not be saved between sessions', Colors.red)}]
 {color('modifiers')}: list the active modifiers and optionally remove one or all modifiers from all songs
 {color('q')} or {color('quit')}: return to {color('and update', Colors.bold)} the menu
 Playback modes:
     {color('repeat')}: repeat the current song indefinitely
     {color('loop')}: loop through the playlist from the current song
     {color('shuffle')}: randomly select a song from the playlist
-{color('karaoke')}: turn on lyrics for this song    [{color('Warning: karaoke mode can’t be turned off until the song ends', Colors.red)}]
-{color('encore')}: repeat the current song one more time
+{color('karaoke')}(🎤): turn on lyrics for this song    [{color('Warning: karaoke mode can’t be turned off until the song ends', Colors.red)}]
+{color('encore')}(🔁): repeat the current song one more time
 {color('pause')}: pause the music player
 {color('resume')}: resume the music player and restart the current song
 {color('skip')} or [{color('>>')}]: stop the current song and play the next song
 {color('<song name>')}: list the available actions and modifiers for this song
 [{color('exit')}] or [{color('stop')}]: terminate the program
-{color('exit later')}: terminate the program after the current song ends    [{color('Tip: enter this command again to cancel it', Colors.green)}]""")
+{color('exit later')}(⌛): terminate the program after the current song ends    [{color('Tip: enter this command again to cancel it', Colors.green)}]""")
 
         print()
         self.input_command(input("Enter a command: "))
@@ -753,19 +776,20 @@ Playback modes:
                     hide_cursor()
 
                     display_range:int = min((get_terminal_size().lines - 1) // 2, max_display_range) # How many lines before/after the current line of lyrics to display
+                    display_width:int = get_terminal_size().columns
                     for prev_line_index in range(i - display_range, i):
                         if prev_line_index >= 0:
-                            print(color(lyrics[prev_line_index]["text"], Colors.faint), end = "")
+                            print(color(f'{lyrics[prev_line_index]["text"] : <{display_width}}', Colors.faint), end = "")
                         else:
                             print()
 
                     curr_line:str = lyrics[i]["text"]
-                    print(curr_line, end = "")
+                    print(f'{curr_line : <{display_width}}', end = "")
 
                     if i < len(lyrics) - 1:
                         for next_line_index in range(i + 1, i + display_range + 1):
                             if next_line_index < len(lyrics):
-                                print(color(lyrics[next_line_index]["text"], Colors.faint), end = "")
+                                print(color(f'{lyrics[next_line_index]["text"] : <{display_width}}', Colors.faint), end = "")
                             else:
                                 print()
 
@@ -776,7 +800,7 @@ Playback modes:
                             cursor_up(lines = display_range + 1) # Move the cursor to the beginning of the currently playing lyric line
 
                         # Wait until the time of the next line has been reached
-                        # Keeps the offset between the lyrics and the song due to lag to within 0.05s
+                        # Keeps the offset between the lyrics and the song due to lag to within 0.1s
                         while True:
                             time_elapsed:float = round((time() - self.curr_song.start_time), 2) + delay
 
@@ -788,7 +812,7 @@ Playback modes:
                             elif time_elapsed >= lyrics[i + 1]["time"]:
                                 break
 
-                            wait(0.05)
+                            wait(0.1)
                     else: # If there are no more lyrics
                         wait(self.curr_song.duration - (time() - self.curr_song.start_time))
                         self.update_ui()
@@ -798,20 +822,25 @@ Playback modes:
         self.save()
 
         if not command: # If the command is an empty string
-            indicator_criterias:dict[str, bool] = {"🎤" : bool(self.curr_song.lyrics),
+            indicator_conditions:dict[str, bool] = {"🎤" : bool(self.curr_song.lyrics),
                                                     "🔁" : self.encore_activated,
                                                     "⌛" : self.exit_later}
             indicators:list[str] = []
-            for indicator, criteria in indicator_criterias.items():
-                if criteria:
+            for indicator, condition in indicator_conditions.items():
+                if condition == True:
                     indicators.append(indicator)
 
+            # Both conditionals will set indicators to a string
             if len(indicators):
                 indicators:str = "| " + " ".join(indicators)
             else:
                 indicators = ""
 
-            print(f"Currently playing: {color(f'{self.curr_song.song_name : <{self._max_song_name_length}}', Colors.green)}   {color(f'{to_minutes_str(self.curr_song.curr_duration)}/{to_minutes_str(self.curr_song.duration)}', Colors.cyan) : <11} {indicators} | Playback mode: {color(f'{self.mode.name : <10}', Colors.orange)}")
+            currently_playing_line:str = f"{self.remaining_cooldown_indicator : ^40}"
+            if not self.remaining_cooldown_indicator: # If there is no active cooldown between songs
+                currently_playing_line = f"Currently playing: {color(f'{self.curr_song.song_name : <{self._max_song_name_length}}', Colors.green)}   {color(f'{to_minutes_str(self.curr_song.curr_duration)}/{to_minutes_str(self.curr_song.duration)}', Colors.cyan) : <11} {indicators}"
+            print(f"{currently_playing_line} | Playback mode: {color(f'{self.mode.name : <10}', Colors.orange)}")
+            
             if not self.playing:
                 print("--Player paused--")
             print()
@@ -839,15 +868,15 @@ Playback modes:
             index:int = int(command) - 1
             if index >= 0 and index < len(self.queue):
                 self.remove_queued_item(remove_at_index = index)
-            else:
+            else: # If the command is a number, but isn't a valid index
                 self.input_command(command, index_search_enabled = False)
-        except:
+        except: # If the command can't be cast to a number
             self.input_command(command, index_search_enabled = False)
 
         return
 
     # Takes in the user's input and tries to find a corresponding command with list_actions()
-    # Won't print anything
+    # Won't directly print anything
     def input_command(self, command:str, index_search_enabled:bool = True) -> None:
         if command == "" or command == "q" or command == "quit":
             valid_commands["quit"](self)
@@ -856,7 +885,7 @@ Playback modes:
             if index_search_enabled:
                 index_search_list = []
 
-            self.list_actions(search_for_item(command, list(valid_commands.keys()) + self.song_names, index_search_list = index_search_list))
+            self.list_actions(search_for_item(command, list(valid_commands.keys()) + self.song_names + ["*"], index_search_list = index_search_list))
 
         return
 
@@ -908,11 +937,14 @@ Playback modes:
             block_until_input()
             self.listing_info[list_type]["no results"]["action"](listing_item_name)
             return
-            
+
         elif len(results) == 1:
             result:str = results[0]
+
+            if result == "*":
+                self.enqueue()
                 
-            if result in valid_commands.keys():
+            elif result in valid_commands.keys():
                 valid_commands[result](self)
                 return
 
@@ -1048,32 +1080,36 @@ Playback modes:
                 commands_finished = True
 
             if commands_finished and modifiers_finished: # If this result isn't a command or modifier, then assume all subsequent results are songs
-                result_song:Song = self.songs[result]
-                # THIS IS THE PINNACLE OF UI DESIGN
-                name:str = result
-                applied_colors:list[str] = []
-                overflow_dashes = ""
-                # Color the currently playing song green (if listed), color any other queued songs purple, and color songs with sequences light yellow
-                for key, value in result_song.attributes.items():
-                    if enabled_colors[key]["enabled"] and enabled_colors[key]["color"] and value:
-                        applied_colors.append(enabled_colors[key]["color"])
+                if result == "*": # Can only show up in results if list_actions was used (when listing the queue or when there's no listing mode)
+                    line = f"{str(count) + '.' : <{max_digits + 1}} {result}"
 
-                if enabled_colors["modifiers"]["enabled"]:
-                    for modifier in result_song.attributes["modifiers"]:
-                        if modifier == Modifiers.disabled: # The disabled modifier is always shown first
-                            applied_colors.insert(0, modifier.value['color'])
-                        else:
-                            applied_colors.append(modifier.value['color'])
+                else:
+                    result_song:Song = self.songs[result]
+                    # THIS IS THE PINNACLE OF UI DESIGN
+                    name:str = result
+                    applied_colors:list[str] = []
+                    overflow_dashes = ""
+                    # Color the currently playing song green (if listed), color any other queued songs purple, and color songs with sequences light yellow
+                    for key, value in result_song.attributes.items():
+                        if enabled_colors[key]["enabled"] and enabled_colors[key]["color"] and value:
+                            applied_colors.append(enabled_colors[key]["color"])
 
-                if len(applied_colors) > 0:
-                    name = color(name, applied_colors[0])
-                    del applied_colors[0]
-                for curr_color in applied_colors:
-                    overflow_dashes += color(overflow_chars, curr_color)
+                    if enabled_colors["modifiers"]["enabled"]:
+                        for modifier in result_song.attributes["modifiers"]:
+                            if modifier == Modifiers.disabled: # The disabled modifier is always shown first
+                                applied_colors.insert(0, modifier.value['color'])
+                            else:
+                                applied_colors.append(modifier.value['color'])
 
-                # I can't explain how this line works even if I tried
-                line = f"{str(count) + '.' : <{max_digits + 1}} {name} {overflow_dashes}{color('-' * (self._max_song_name_length - len(result) - len(applied_colors)*len(overflow_chars) + (len(Modifiers) + len(enabled_colors))*len(overflow_chars)), Colors.faint)} {color(to_minutes_str(self.songs[result].duration), Colors.cyan)}"
-            
+                    if len(applied_colors) > 0:
+                        name = color(name, applied_colors[0])
+                        del applied_colors[0]
+                    for curr_color in applied_colors:
+                        overflow_dashes += color(overflow_chars, curr_color)
+
+                    # I can't explain how this line works even if I tried
+                    line = f"{str(count) + '.' : <{max_digits + 1}} {name} {overflow_dashes}{color('-' * (self._max_song_name_length - len(result) - len(applied_colors)*len(overflow_chars) + (len(Modifiers) + len(enabled_colors))*len(overflow_chars)), Colors.faint)} {color(to_minutes_str(self.songs[result].duration), Colors.cyan)}"
+                
             if line: # Don't do anything if line is an empty string
                 print(f"{line : <{left_margin + (len(line) - len(remove_tags(line)))}}", end = "")
                 if list_type == ListModes.Queue and count <= len(self.sequence):
@@ -1087,7 +1123,7 @@ Playback modes:
                 
                 count += 1
         
-        # Print any extra sequence songs that didn't get attached to the end of a "queued song" line
+        # Print any more songs in the sequence that didn't get attached to the end of a "queued song" line
         if list_type == ListModes.Queue:
             while count <= len(self.sequence):
                 print(f"{'' : <{left_margin}}{get_sequence_line()}")
@@ -1146,7 +1182,7 @@ Playback modes:
         self.mode = Modes.Shuffle
         self.update_ui()
 
-    # All functions in this dictionary must be able to be called with only a "self" argument
+    # All functions in this dictionary must be able to be called with only the "self" argument
     global valid_commands
     valid_commands = {"help" : display_help,
                         "pause" : pause,
@@ -1157,7 +1193,6 @@ Playback modes:
                         "list" : list_songs,
                         "encore" : encore,
                         "queue" : list_queue,
-                        "*" : enqueue,
                         "modifiers" : list_active_modifiers,
                         "q" : update_ui,
                         "quit" : update_ui,
@@ -1248,18 +1283,21 @@ if alert: # Prevent the "song dropped" messages from being instantly cleared fro
 player = spotify(songs, song_names)
 
 def play():
+    player.play_next_song(interlude = False) # Disable the waiting period before the first song
+
     while True:
         if player.playing:
-            player.play_next_song() # Yields within 1.5 seconds after the player is paused
-            # If the user uses delayed exit, player.stop() called in play_next_song() will only kill this song-playing thread
+            player.play_next_song(interlude = True) # Yields within 1.5 seconds after the player is paused
+            # TODO If the user uses delayed exit, player.stop() called in play_next_song() will only kill this song-playing thread
         else:
             wait(0.5) # Wait and check whether the user has resumed the player
 
 player_thread = Thread(target = play, daemon = True)
 player_thread.start()
 
-while not player.curr_song: # Wait for the player_thread to set the current song before showing/starting the ui
+while not player.curr_song: # Wait for the player_thread to set the current song before showing/starting up the ui
     wait(1)
 
-show_cursor() # Once most of the setup is done
+# Once most of the setup is done
+show_cursor()
 player.start()

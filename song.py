@@ -59,8 +59,6 @@ class Song:
     def play(self):
         # Update the parent player's list of songs that are on cooldown
         self.player.curr_song = self
-        if Modifiers.hot not in self.attributes["modifiers"]:
-            self.player.songs_on_cooldown.append(self.song_name)
 
         self.attributes["playing"] = True
 
