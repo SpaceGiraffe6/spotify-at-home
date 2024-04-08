@@ -5,7 +5,7 @@ from winsound import PlaySound, SND_ASYNC
 from threading import Thread
 from random import randint
 from difflib import get_close_matches
-from math import ceil
+from math import floor, ceil
 
 from song import Song
 from info import Modifiers, Colors, SEQUENCES, EXCLUSIVE_MODIFIERS
@@ -252,12 +252,13 @@ class spotify:
     # Call this after the thread that plays the songs has been started
     def start(self) -> None:
         if len(self.songs) > 0:
+            show_cursor()
             self.update_ui()
         else:
             print("No valid audio files found!")
             block_until_input("Press enter to exit")
             exit()
-    # Updates the save file
+    # Rewrites the save file
     def save(self) -> None:
         def trim_enum_str(enum):
             return str(enum).split(":")[0]
@@ -301,9 +302,9 @@ class spotify:
     def stop(self) -> None:
         clear_console()
         self.save()
-        self.terminated = True
         print("Program terminated via command!")
-        exit()
+        self.terminated = True
+        # exit()
     # Stops the program after the current song ends
     def delayed_exit(self) -> None:
         self.exit_later = not self.exit_later
@@ -683,17 +684,17 @@ class spotify:
             if (self.curr_song.song_name in SEQUENCES.keys()) and len(self.sequence) == 0:
                 self.sequence = [self.songs[song_name]  for song_name in SEQUENCES[self.curr_song.song_name] if song_name in self.song_names]
         
+        self.save()
+        if self.exit_later:
+            self.stop()
+            return
+
         # Updates the songs on cooldown
         if len(self.songs_on_cooldown) >= self.COOLDOWN_BETWEEN_REPEATS:
             del self.songs_on_cooldown[0]
         # self.curr_song will have already been set to the next song at this point
         if Modifiers.hot not in self.curr_song.attributes["modifiers"]:
             self.songs_on_cooldown.append(self.curr_song.song_name)
-
-        self.save()
-        if self.exit_later:
-            self.stop()
-            return
         
         if interlude: # Will be set to false when playing the first song so that everything saves BEFORE waiting and then playing each subsequent song
             buffer:float = 0.5 # If the song was paused, wait a little for pause() to set self.playing to false before checking self.playing
@@ -836,7 +837,8 @@ Playback modes:
             else:
                 indicators = ""
 
-            currently_playing_line:str = f"{self.remaining_cooldown_indicator : ^40}"
+            # If the cooldown is active, allot 75% of the terminal width to the cooldown indicator, clamped between 70 and the maximum possible length of the indicator
+            currently_playing_line:str = f"{self.remaining_cooldown_indicator : ^{min(max(floor(get_terminal_size().columns * 0.75), self.COOLDOWN_BETWEEN_SONGS), 70)}}"
             if not self.remaining_cooldown_indicator: # If there is no active cooldown between songs
                 currently_playing_line = f"Currently playing: {color(f'{self.curr_song.song_name : <{self._max_song_name_length}}', Colors.green)}   {color(f'{to_minutes_str(self.curr_song.curr_duration)}/{to_minutes_str(self.curr_song.duration)}', Colors.cyan) : <11} {indicators}"
             print(f"{currently_playing_line} | Playback mode: {color(f'{self.mode.name : <10}', Colors.orange)}")
@@ -1283,6 +1285,9 @@ if alert: # Prevent the "song dropped" messages from being instantly cleared fro
 player = spotify(songs, song_names)
 
 def play():
+    player_thread = Thread(target = player.start, daemon = True)
+    player_thread.start()
+
     player.play_next_song(interlude = False) # Disable the waiting period before the first song
 
     while True:
@@ -1292,12 +1297,14 @@ def play():
         else:
             wait(0.5) # Wait and check whether the user has resumed the player
 
-player_thread = Thread(target = play, daemon = True)
-player_thread.start()
+music_thread = Thread(target = play, daemon = True)
+music_thread.start()
 
-while not player.curr_song: # Wait for the player_thread to set the current song before showing/starting up the ui
+while not player.terminated: # Yields once the user exits the player, killing every thread
     wait(1)
 
-# Once most of the setup is done
-show_cursor()
-player.start()
+# while not player.curr_song: # Wait for the player_thread to set the current song before showing/starting up the ui
+#     wait(1)
+
+# # Once most of the setup is done
+# player.start()
