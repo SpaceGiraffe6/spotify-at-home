@@ -655,6 +655,8 @@ class spotify:
     # Only call this function from a separate thread (if playing a song)
     # Adds a song to the queue if requested_song_name is provided
     def play_next_song(self, interlude:bool = True) -> None:
+        song_is_queued:bool = False # Only used if the new curr_song is from the queue
+
         if self.encore_activated:
             self.encore_activated = False
             # Do nothing to curr_song and curr_song_index so the same song repeats
@@ -666,9 +668,8 @@ class spotify:
                 self.curr_song_index = self.song_names.index(song.song_name)
             
             elif len(self.queue) > 0:
+                song_is_queued = True
                 song:Song = self.queue[0]
-                del self.queue[0]
-                del self.queue_song_names[0]
                 if song:
                     if song.song_name not in self.queue_song_names: # In case this song was enqueued multiple times
                         song.attributes["queued"] = False
@@ -684,11 +685,14 @@ class spotify:
             if (self.curr_song.song_name in SEQUENCES.keys()) and len(self.sequence) == 0:
                 self.sequence = [self.songs[song_name]  for song_name in SEQUENCES[self.curr_song.song_name] if song_name in self.song_names]
         
-        self.save()
+        # Delay on updating the save file if delayed exit is not toggled because there is a gap between when curr_song is set to the queued item and when the item is removed from the queue
         if self.exit_later:
+            if song_is_queued:
+                self.remove_queued_item()
+            self.save()
             self.stop()
             return
-
+        # TODO If the user exits the program during the cooldown between songs without using delayed exit when a queued song is about to play, the new song would have been set as curr_song but wouldn't've been removed from the queue yet
         # Updates the songs on cooldown
         if len(self.songs_on_cooldown) >= self.COOLDOWN_BETWEEN_REPEATS:
             del self.songs_on_cooldown[0]
@@ -709,6 +713,9 @@ class spotify:
                     wait(1)
                     self.remaining_cooldown_indicator = "-" * seconds_remaining
 
+        if song_is_queued:
+            self.remove_queued_item(remove_at_index = 0)
+        self.save()
 
         self.curr_song.play() # Plays the song in the same thread as this method
 
@@ -763,7 +770,7 @@ Playback modes:
 
     def karaoke(self) -> None:
         delay:float = -0.45 # Number of seconds to delay the lyrics by to compensate for lag
-        max_display_range:int = 5 # Max number of lines before/after the current line of lyrics to display
+        max_display_range:int = 16 # Max number of lines before/after the current line of lyrics to display
         lyrics:list[dict[str, any]] = self.curr_song.lyrics # Each line's text includes a newline character at the end
 
         if not lyrics:
@@ -776,21 +783,24 @@ Playback modes:
                     clear_console()
                     hide_cursor()
 
-                    display_range:int = min((get_terminal_size().lines - 1) // 2, max_display_range) # How many lines before/after the current line of lyrics to display
                     display_width:int = get_terminal_size().columns
+                    display_height:int = get_terminal_size().lines
+                    display_range:int = min((display_height - 1) // 2, max_display_range) # How many lines before/after the current line of lyrics to display
+                    print("\n" * ((display_height - display_range * 2 - 1) // 2), end = "") # Vertically center the lyrics by adding newline paddings before printing the lyric lines
+
                     for prev_line_index in range(i - display_range, i):
                         if prev_line_index >= 0:
-                            print(color(f'{lyrics[prev_line_index]["text"] : <{display_width}}', Colors.faint), end = "")
+                            print(color(f"{lyrics[prev_line_index]['text'] : ^{display_width}}", Colors.faint))
                         else:
                             print()
 
                     curr_line:str = lyrics[i]["text"]
-                    print(f'{curr_line : <{display_width}}', end = "")
+                    print(f'{curr_line : ^{display_width}}')
 
                     if i < len(lyrics) - 1:
                         for next_line_index in range(i + 1, i + display_range + 1):
                             if next_line_index < len(lyrics):
-                                print(color(f'{lyrics[next_line_index]["text"] : <{display_width}}', Colors.faint), end = "")
+                                print(color(f'{lyrics[next_line_index]["text"] : ^{display_width}}', Colors.faint))
                             else:
                                 print()
 
@@ -799,6 +809,7 @@ Playback modes:
                         notes_shown:int = 0
                         if notes_count:
                             cursor_up(lines = display_range + 1) # Move the cursor to the beginning of the currently playing lyric line
+                            print(" " * ((display_width - len(curr_line)) // 2), end = "")
 
                         # Wait until the time of the next line has been reached
                         # Keeps the offset between the lyrics and the song due to lag to within 0.1s
@@ -807,13 +818,14 @@ Playback modes:
 
                             if notes_shown < notes_count and time_elapsed >= lyrics[i]["time"] + ((notes_shown + 1) * segment_time):
                                 notes_shown += 1
-                                print(color('\u2669 ' * notes_shown, Colors.bold), end = "")
-                                print("\033[F") # Move the cursor to the beginning of the current line
+                                print(color('\u2669 ', Colors.bold), end = "")
+                                # print("\033[F") # Move the cursor to the beginning of the current line
 
                             elif time_elapsed >= lyrics[i + 1]["time"]:
                                 break
 
                             wait(0.1)
+
                     else: # If there are no more lyrics
                         wait(self.curr_song.duration - (time() - self.curr_song.start_time))
                         self.update_ui()
@@ -837,10 +849,9 @@ Playback modes:
             else:
                 indicators = ""
 
-            # If the cooldown is active, allot 75% of the terminal width to the cooldown indicator, clamped between 70 and the maximum possible length of the indicator
-            currently_playing_line:str = f"{self.remaining_cooldown_indicator : ^{min(max(floor(get_terminal_size().columns * 0.75), self.COOLDOWN_BETWEEN_SONGS), 70)}}"
-            if not self.remaining_cooldown_indicator: # If there is no active cooldown between songs
-                currently_playing_line = f"Currently playing: {color(f'{self.curr_song.song_name : <{self._max_song_name_length}}', Colors.green)}   {color(f'{to_minutes_str(self.curr_song.curr_duration)}/{to_minutes_str(self.curr_song.duration)}', Colors.cyan) : <11} {indicators}"
+            currently_playing_line = f"Currently playing: {color(f'{self.curr_song.song_name : <{self._max_song_name_length}}', Colors.green)}   {color(f'{to_minutes_str(self.curr_song.curr_duration)}/{to_minutes_str(self.curr_song.duration)}', Colors.cyan) : <11} {indicators}"
+            if self.remaining_cooldown_indicator: # If the cooldown is active, ensure that there is enough sapce for the maximum size of the indicator while also adding spaces to match the length of the line with its length when a song is playing
+                currently_playing_line:str = f"{self.remaining_cooldown_indicator : ^{max(len(currently_playing_line) - len(indicators) - 1 - self.COOLDOWN_BETWEEN_SONGS, self.COOLDOWN_BETWEEN_SONGS)}}"
             print(f"{currently_playing_line} | Playback mode: {color(f'{self.mode.name : <10}', Colors.orange)}")
             
             if not self.playing:
@@ -1301,10 +1312,4 @@ music_thread = Thread(target = play, daemon = True)
 music_thread.start()
 
 while not player.terminated: # Yields once the user exits the player, killing every thread
-    wait(1)
-
-# while not player.curr_song: # Wait for the player_thread to set the current song before showing/starting up the ui
-#     wait(1)
-
-# # Once most of the setup is done
-# player.start()
+    wait(0.5)

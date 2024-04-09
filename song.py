@@ -2,17 +2,17 @@ from winsound import PlaySound, SND_ASYNC
 from math import ceil
 from time import sleep as wait, time
 from wave import open as open_wav
+from typing import Union
 
-from info import Modifiers
 # time: a string representing a time in mm:ss.ss format
-# returns the time in seconds w/ decimals
+# converts and returns the time in seconds w/ decimals
 def to_seconds(time:str) -> float:
     time:list[str] = time.split(":")
     return (int(time[0]) * 60) + float(time[1])
 
 class Song:
     # File name includes the path to the file
-    def __init__(self, song_name:str, file_name:str, seconds_duration:int = None):
+    def __init__(self, song_name:str, file_name:str):
         self.file_name:str = file_name
         if file_name[len(file_name) - 4:] != ".wav": # Just in case
             self.file_name += ".wav"
@@ -26,25 +26,28 @@ class Song:
         self.start_time = None
 
         # KEYS IN attributes MUST MATCH KEYS IN enabled_colors IN spotify.list_actions
-        self.attributes:dict[str, any] = {"playing" : False, # This attribute is updated from the play function, not from Spotify
+        self.attributes:dict[str, Union(bool, set)] = {"playing" : False, # This attribute is updated from the play function, not from Spotify
                                         "queued" : False,
                                         "sequenced" : False,
                                         "modifiers" : set()}
 
         # Each item in lyrics is a dictionary representing a line in the form of {"time" : start time of this line, "text" : the line's text}
         # lyrics will be None if no lyrics text file 
-        self.lyrics:list[dict[str, any]] = None
+        self.lyrics:list[dict[str, Union(int, str)]] = None
         try:
-            lines = open(f"lyrics/{self.song_name}.txt", "r").readlines() # Will error if no lyrics file with the same name as the song is found
+            lines:list[str] = open(f"lyrics/{self.song_name}.txt", "r").readlines() # Will error if no lyrics file with the same name as the song is found
 
-            for line in lines:
-                line = {"time" : to_seconds(line[:line.index(" ")]), "text" : line[line.index(" ") + 1:]}
-                # Add in the quarter note symbols
-                line["text"] = line["text"].replace("/u2669", "\u2669")
+            for i in range(len(lines)):
+                line:str = lines[i]
+
+                line = line.replace("/u2669", "\u2669") # Add in any quarter note symbols
+                if i != len(lines) - 1: # The last line of each lyrics file won't have a new line after it
+                    line = line[:len(line) - 1] # Remove the newline character at the end of the line
 
                 if not self.lyrics:
                     self.lyrics = []
-                self.lyrics.append(line) # Newline characters will be included at the end of each line's text
+
+                self.lyrics.append({"time" : to_seconds(line[:line.index(" ")]), "text" : line[line.index(" ") + 1:]})
         except:
             self.lyrics = None # If something is wrong with the lyrics' formatting and only some of the lyrics were added
             pass
@@ -67,7 +70,7 @@ class Song:
 
         self.attributes["playing"] = False
 
-    # Don't call from the main thread
+    # Don't call this function from the main thread
     def start_timer(self) -> None:
         self.curr_duration = 0
         self.start_time = time()
