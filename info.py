@@ -29,13 +29,16 @@ class Colors(Enum):
     bolded_purple = "\033[1;35"
     light_purple = "\033[1;35m"
 
+STANDARD_SONG_LENGTH:int = 180 # Used to scale the weight of each song by its length
+BASE_SONG_WEIGHT:int = 120 # because its divisible by almost everything
+RATE_CHANGE:int = 3 # Percent increase/decrease of the chances for a hot/cold song to be chosen, in decimal form. Has to be a whole number
 class Modifiers(Enum):
-    hot = {"color" : Colors.pink, "description" : "While in shuffle mode, increase the chance of a song being played and disables its cooldown"}
-    cold = {"color" : Colors.cool_blue, "description" : "While in shuffle mode, lower the chance of a song being played"}
-    disabled = {"color" : Colors.faint, "description" : "While in loop or shuffle mode, prevent this song from being played"}
-    synced = {"color" : Colors.aquamarine, "description" : "While in shuffle mode, consider each set of synced songs as one song when choosing the next song"}
+    hot = {"color" : Colors.pink, "description" : "While in shuffle mode, increase the chance of a song being played and disables its cooldown", "weight update" : lambda curr_weight, *overflow : curr_weight*RATE_CHANGE}
+    cold = {"color" : Colors.cool_blue, "description" : "While in shuffle mode, lower the chance of a song being played", "weight update" : lambda curr_weight, *overflow : round(curr_weight/RATE_CHANGE)}
+    disabled = {"color" : Colors.faint, "description" : "While in loop or shuffle mode, prevent this song from being played", "weight update" : lambda curr_weight, *overflow : 0}
+    synced = {"color" : Colors.aquamarine, "description" : "While in shuffle mode, consider each set of synced songs as one song when choosing the next song", "weight update" : lambda curr_weight, synced_songs_count : round(curr_weight/synced_songs_count)}
 
-# Don't put the ".wav" after song names in the sequences and song_lengths dictionaries
+# Don't put the ".wav" after song names in the sequences dictionary
 SEQUENCES:"dict[str, list[str]]" = {"Sparkle - movie ver" : ["Nandemonaiya (English)"],
             "Snowdin Town" : ["His Theme", "Home"],
             "Brave Song (Piano)" : ["Qingyun Peak"]}

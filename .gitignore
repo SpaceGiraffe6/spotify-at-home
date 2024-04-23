@@ -1,3 +1,6 @@
+# Ignore the local settings
+/.vscode
+
 # Ignore all .wav files under songs
 songs/*.wav
 
