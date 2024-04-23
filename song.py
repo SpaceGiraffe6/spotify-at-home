@@ -4,6 +4,8 @@ from time import sleep as wait, time
 from wave import open as open_wav
 from typing import Union
 
+from info import Modifiers, BASE_SONG_WEIGHT, STANDARD_SONG_LENGTH
+
 # time: a string representing a time in mm:ss.ss format
 # converts and returns the time in seconds w/ decimals
 def to_seconds(time:str) -> float:
@@ -21,7 +23,6 @@ class Song:
 
         with open_wav(file_name, "r") as file:
             self.duration = ceil(file.getnframes() / file.getframerate())
-
         self.curr_duration:int = 0
         self.start_time = None
 
@@ -51,7 +52,10 @@ class Song:
         except:
             self.lyrics = None # If something is wrong with the lyrics' formatting and only some of the lyrics were added
             pass
-
+        
+        self.BASE_WEIGHT:int = BASE_SONG_WEIGHT + max(-BASE_SONG_WEIGHT//5, min(BASE_SONG_WEIGHT//5, (STANDARD_SONG_LENGTH - self.duration)//8)) # Slightly increase the weights of shorter songs and vice versa
+        self.weight:int = self.BASE_WEIGHT
+        self.cooldown:int = 3
 
     def __str__(self) -> str:
         return self.song_name
@@ -60,9 +64,6 @@ class Song:
         self.player = parent_player
 
     def play(self):
-        # Update the parent player's list of songs that are on cooldown
-        self.player.curr_song = self
-
         self.attributes["playing"] = True
 
         PlaySound(self.file_name, SND_ASYNC)
@@ -84,3 +85,23 @@ class Song:
             else:
                 self.curr_duration -= 1
                 break
+
+    # Pass in nothing to modifiers to only update the weight based on synced_songs_count
+    # Adding a modifier that has already been added won't do anything
+    def add_modifiers(self, synced_songs_count:int = 1, *modifiers:"tuple[Modifiers]") -> None:
+        self.attributes["modifiers"] = self.attributes["modifiers"] | set(modifiers)
+        self.recalculate_weight(synced_songs_count)
+
+    def remove_modifiers(self, synced_songs_count:int = 1, *modifiers:"tuple[Modifiers]") -> None:
+        self.attributes["modifiers"] = self.attributes["modifiers"] - set(modifiers)
+        self.recalculate_weight(synced_songs_count)
+
+    def clear_modifiers(self) -> None:
+        self.attributes["modifiers"].clear()
+        self.weight = self.BASE_WEIGHT
+
+    # Only called from within this object
+    def recalculate_weight(self, synced_songs_count:int) -> None:
+        self.weight = self.BASE_WEIGHT
+        for modifier in self.attributes["modifiers"]:
+            self.weight = modifier.value["weight update"](self.weight, synced_songs_count)

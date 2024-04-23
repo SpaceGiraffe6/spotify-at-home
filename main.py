@@ -5,10 +5,10 @@ from winsound import PlaySound, SND_ASYNC
 from threading import Thread
 from random import randint
 from difflib import get_close_matches
-from math import floor, ceil
+from math import ceil
 
 from song import Song
-from info import Modifiers, Colors, SEQUENCES, EXCLUSIVE_MODIFIERS
+from info import Modifiers, Colors, SEQUENCES, EXCLUSIVE_MODIFIERS, RATE_CHANGE
 
 # Converts the number of seconds into a str in mm:ss format
 def to_minutes_str(seconds:int) -> str:
@@ -95,13 +95,17 @@ def search_for_item(search:str, search_list:"list[str]", index_search_list:"list
     shortened_results:list[str] = get_close_matches(search, [short_name for short_name, *overflow_values in search_pairs]) # The higher the cutoff parameter (between 0 and 1), the stricter the search will be
     
     return [name for short_name, name in search_pairs if short_name in shortened_results]
-# Removes repeat values from target in-place and returns the new, edited list
+# Removes repeat values from target in-place and returns a new, edited list
 def remove_duplicates(target:list) -> list:
-    d:dict[any, None] = {}
-    for item in target:
-        d[item] = None
+    s:set = set(target)
 
-    return list(d.keys())
+    processed_list:list = []
+    for item in target:
+        if item in s:
+            processed_list.append(item)
+            s.discard(item)
+
+    return processed_list
 
 # Remove any parenthesized tags in the song name and return the new song name
 def get_pure_song_name(song_name:str) -> str:
@@ -142,7 +146,6 @@ class spotify:
     COOLDOWN_BETWEEN_SONGS:int = 8 # Seconds
     # When the playback mode is shuffle, the minimum number of songs that would have to play between each repeat
     COOLDOWN_BETWEEN_REPEATS:int = 5 # Will be capped at len(playlist) - 1
-    RATE_CHANGE:int = 3 # Percent increase/decrease of the chances for a hot/cold song to be chosen, in decimal form. Has to be a whole number
     
     SAVE_FILE_PATH:str = "save.file"
 
@@ -193,7 +196,8 @@ class spotify:
                 self.modifiers[modifier] = []
             else:
                 # Add this modifier to the songs that are initialized with the modifier
-                [song.attributes["modifiers"].add(modifier) for song in [self.songs[song_name] for song_name in self.modifiers[modifier]]]
+                # Temporarily set the synced count of all songs to 1
+                [song.add_modifiers(1, modifier) for song in [self.songs[song_name] for song_name in self.modifiers[modifier]]]
 
         self.synced_songs:dict[str, list[str]] = {}
         for song_name in self.modifiers[Modifiers.synced]:
@@ -201,15 +205,21 @@ class spotify:
             self.synced_songs.setdefault(pure_song_name, [])
             self.synced_songs[pure_song_name].append(song_name)
 
+        # Update the synced count of all synced songs
+        for synced_list in self.synced_songs.values():
+            for song_name in synced_list:
+                self.songs[song_name].add_modifiers(len(synced_list))
+
         self.remaining_cooldown_indicator:str = "" # Indicates how much time is left for the cooldown period between this song and the next one
         self.COOLDOWN_BETWEEN_REPEATS:int = min(len(self.song_names) - 1, self.COOLDOWN_BETWEEN_REPEATS)
-        self.songs_on_cooldown:list[str] = []
+        self.songs_on_cooldown:list[list[Song]] = [[]*self.COOLDOWN_BETWEEN_SONGS]
 
         self.encore_activated:bool = False
         self.exit_later:bool = False
 
         self.playing:bool = True
         self.terminated:bool = False
+        self.interlude_flag:bool = True # Whether there will be a cooldown period before the next song plays. Will be (re)set to True when the next song starts playing
 
         self.listing_info:dict[ListModes, dict[str, any]] = {
             ListModes.Songs : {
@@ -248,6 +258,14 @@ class spotify:
                 "disabled color keys" : [],
                 "prompt" : f"Enter the index or the name of the result ({color('q')}/{color('quit')} to cancel): "
             }}
+
+    # Returns the number of songs synced with this song, including this song
+    def get_synced_count(self, song_name:str) -> int:
+        pure_name:str = get_pure_song_name(song_name)
+        if pure_name in self.synced_songs:
+            return len(self.synced_songs[pure_name])
+        else:
+            return 1
 
     # Call this after the thread that plays the songs has been started
     def start(self) -> None:
@@ -304,7 +322,6 @@ class spotify:
         self.save()
         print("Program terminated via command!")
         self.terminated = True
-        # exit()
     # Stops the program after the current song ends
     def delayed_exit(self) -> None:
         self.exit_later = not self.exit_later
@@ -370,7 +387,7 @@ class spotify:
         block_until_input()
 
         self.update_ui()
-    # Used exclusively by remove_queued_item
+    # Removes an item without printing anything
     # Returns the name of the song that was removed
     def remove_queued_item_at_index(self, index:int) -> str:
         song_name:str = self.queue_song_names[index]
@@ -444,7 +461,7 @@ class spotify:
             return
 
         self.modifiers[modifier].append(song_name)
-        self.songs[song_name].attributes["modifiers"].add(modifier)
+        self.songs[song_name].add_modifiers(self.get_synced_count(song_name), modifier)
 
         print(f"Added the {color(modifier.name, modifier.value['color'])} modifier to {color(song_name, Colors.bold)}")
         block_until_input()
@@ -464,7 +481,7 @@ class spotify:
                 self.synced_songs[pure_name] = syncing_songs
                 for syncing_song_name in syncing_songs:
                     self.modifiers[Modifiers.synced].append(syncing_song_name)
-                    self.songs[syncing_song_name].attributes["modifiers"].add(Modifiers.synced)
+                    self.songs[syncing_song_name].add_modifiers(len(syncing_songs), Modifiers.synced)
 
                 print(f"{color('Synced', Modifiers.synced.value['color'])} {fix_grammar(syncing_songs, str_color = Colors.bold)}")
             else:
@@ -473,8 +490,10 @@ class spotify:
             # Print the message before self.synced_songs[pure_name] is updated
             print(f"{color('Synced', Modifiers.synced.value['color'])} {color(song_name, Colors.bold)} with {fix_grammar(self.synced_songs[pure_name], str_color = Colors.bold)}")
             
-            self.synced_songs[pure_name].append(song_name)
-            self.songs[song_name].attributes["modifiers"].add(Modifiers.synced)
+            synced_list:list = self.synced_songs[pure_name]
+            synced_list.append(song_name)
+            for synced_song_name in synced_list:
+                self.songs[synced_song_name].add_modifiers(len(synced_list), Modifiers.synced)
 
             # Put this song next to the other songs that are synced with it in self.modifiers[Modifiers.synced]
             for i in range(len(self.modifiers[Modifiers.synced]) - 1, -1, -1):
@@ -519,11 +538,11 @@ class spotify:
             else: # If no song name or modifier is specified
                 for modifier_list in self.modifiers.values():
                     removals += len(modifier_list)
+                    for song_name in modifier_list:
+                        self.songs[song_name].clear_modifiers()
                     modifier_list.clear()
+
                 self.synced_songs.clear()
-                
-                for song in self.songs.values():
-                    song.attributes["modifiers"].clear()
 
                 message = f"Cleared {color(removals, Colors.bold)} modifier(s) from all songs"
         else: # If a modifier is specified
@@ -533,7 +552,7 @@ class spotify:
                 else:
                     try:
                         self.modifiers[modifier].remove(song_name)
-                        self.songs[song_name].attributes["modifiers"].remove(modifier)
+                        self.songs[song_name].remove_modifiers(self.get_synced_count(song_name), modifier)
                         message = f"Removed the {color(modifier.name, modifier.value['color'])} modifier from {color(song_name, Colors.bold)}"
                     except:
                         message = f"{color(song_name, Colors.bold)} doesn't have the {color(modifier.name, modifier.value['color'])} modifier..."
@@ -545,7 +564,7 @@ class spotify:
                         self.desync_songs(pure_name)
                 else:
                     for song_name in self.modifiers[modifier]:
-                        self.songs[song_name].attributes["modifiers"].remove(modifier)
+                        self.songs[song_name].remove_modifiers(self.get_synced_count(song_name), modifier)
 
                     self.modifiers[modifier].clear() # List of synced songs in self.modifiers will be cleared by desync_songs if the modifier is Modifiers.synced
 
@@ -556,16 +575,16 @@ class spotify:
     def desync_songs(self, song_name:str):
         pure_name:str = get_pure_song_name(song_name)
         if pure_name in self.synced_songs:
-            for song_name in self.synced_songs[pure_name]:
-                self.songs[song_name].attributes["modifiers"].remove(Modifiers.synced)
+            synced_songs_list:list = self.synced_songs[pure_name]
+            for song_name in synced_songs_list:
+                self.songs[song_name].remove_modifiers(1, Modifiers.synced)
                 self.modifiers[Modifiers.synced].remove(song_name)
 
             print(f"{color('Desynced', Modifiers.synced.value['color'])} {fix_grammar(self.synced_songs[pure_name], str_color = Colors.bold)}")
             
             del self.synced_songs[pure_name]
         else:
-            print("Something went wrong when desyncing songs!")
-            pass
+            print("Pure name not found in synced songs when desyncing songs!")
 
     # Only call these playback functions from the play_next_song function
     # The playback mode functions will only run if the queue is empty
@@ -574,6 +593,7 @@ class spotify:
         if not self.curr_song: # If no other songs have been played
             self.curr_song_index = randint(0, len(self.song_names) - 1)
             self.curr_song = self.songs[self.song_names[self.curr_song_index]]
+            self.save()
     def loop(self) -> None:
         index_changed:bool = False
         song_name:str = ""
@@ -588,36 +608,28 @@ class spotify:
             song_name = self.song_names[self.curr_song_index]
             
         self.curr_song = self.songs[song_name]
+        self.save()
     def shuffle(self) -> None:
-        disabled_set:set[str] = set(self.modifiers[Modifiers.disabled])
-
-        available_songs:set[str] = set(self.song_names) - disabled_set - set(self.modifiers[Modifiers.synced])
-        if len(available_songs) - len(self.songs_on_cooldown) > 0: # Just in case there are too many songs on cooldown (should be prevented by the cap on cooldown songs set in the constructor)
-            available_songs -= set(self.songs_on_cooldown)
-        available_songs:list[str] = list(available_songs) + list(self.synced_songs.keys())
-
-        if len(available_songs) > 1: # If there's more than 1 available song
-            available_songs += self.modifiers[Modifiers.hot] * self.RATE_CHANGE
-            song_name:str = None
-            while not song_name:
-                # The synced songs in available_songs have been replaced by the keys in self.synced_songs
-                song_name:str = available_songs[randint(0, len(available_songs) - 1)]
-
-                if song_name in self.synced_songs.keys():
-                    valid_variations:list[str] = list(set(self.synced_songs[song_name]) - disabled_set)
-                    if len(valid_variations) > 0: # If this list of synced songs is not empty
-                        song_name = valid_variations[randint(0, len(valid_variations) - 1)]
-                    else:
-                        continue
-
-                if (song_name in self.modifiers[Modifiers.cold]) and randint(1, self.RATE_CHANGE) != 1:
-                    song_name = None
-
-            self.curr_song_index = self.song_names.index(song_name) # Adjust for changes in song indexes when the cooldown songs got removed
-        else:
-            self.curr_song_index = self.song_names.index(available_songs[0])
+        available_songs:list[Song] = list(set(self.songs.values()) - {song for cooldown_group in self.songs_on_cooldown for song in cooldown_group}) # Relative order of songs will be scrambled
+        if len(available_songs) > 1:
+            total_weight:int = 0
+            for song in available_songs:
+                total_weight += song.weight
+            
+            target_weight:int = randint(0, total_weight)
+            for song in available_songs:
+                target_weight -= song.weight
+                if target_weight <= 0:
+                    self.curr_song = song
+                    self.curr_song_index = self.song_names.index(song.song_name)
+                    break
         
-        self.curr_song = self.songs[self.song_names[self.curr_song_index]]
+        # If there's only 1 available song
+        else: # The constructor would've caught/corrected the error if there are no available songs
+            self.curr_song = available_songs[0]
+            self.curr_song_index = self.song_names.index(self.curr_song.song_name)
+
+        self.save()
 
     def pause(self) -> None:
         if self.playing:
@@ -629,6 +641,7 @@ class spotify:
     def resume(self) -> None:
         if not self.playing:
             self.encore_activated = True # Use the encore feature to restart the song that was paused
+            self.interlude_flag = False
             self.playing = True # Will resume the loop in the song-playing thread
             wait(0.75) # Wait for the song-playing thread to set the next song
 
@@ -639,9 +652,11 @@ class spotify:
 
         print("Picking the next song...")
         wait(1.5) # Wait for the current song's timer to stop
+
+        self.interlude_flag = False
         self.playing = True # Resume the song-playing thread
 
-        wait(0.75) # Wait for the song-playing thread to set the next song (Must be longer than the waiting time for each loop in play())
+        wait(0.75) # Wait for the song-playing thread to set the next song (Must be longer than the waiting time in each iteration in the loop in play())
         self.update_ui()
 
     # Repeat the current song an additional time
@@ -654,7 +669,7 @@ class spotify:
 
     # Only call this function from a separate thread (if playing a song)
     # Adds a song to the queue if requested_song_name is provided
-    def play_next_song(self, interlude:bool = True) -> None:
+    def play_next_song(self) -> None:
         song_is_queued:bool = False # Only used if the new curr_song is from the queue
 
         if self.encore_activated:
@@ -678,6 +693,7 @@ class spotify:
                     self.curr_song_index = self.song_names.index(song.song_name)
                 else: # If the queued song is a placeholder
                     mode_actions[self.mode](self)
+            
             else:
                 mode_actions[self.mode](self) # Select the next song based on the current playback mode
 
@@ -694,16 +710,23 @@ class spotify:
             return
         # TODO If the user exits the program during the cooldown between songs without using delayed exit when a queued song is about to play, the new song would have been set as curr_song but wouldn't've been removed from the queue yet
         # Updates the songs on cooldown
-        if len(self.songs_on_cooldown) >= self.COOLDOWN_BETWEEN_REPEATS:
-            del self.songs_on_cooldown[0]
+        del self.songs_on_cooldown[0]
         # self.curr_song will have already been set to the next song at this point
-        if Modifiers.hot not in self.curr_song.attributes["modifiers"]:
-            self.songs_on_cooldown.append(self.curr_song.song_name)
+        # for cooldown_song_name in self.synced_songs.get(self.curr_song.song_name, [self.curr_song.song_name]):
+        #     if Modifiers.hot not in self.songs[cooldown_song_name].attributes["modifiers"]:
+        #         self.songs_on_cooldown.append(cooldown_song_name)
+
+        self.songs_on_cooldown.append([self.songs[song_name] for song_name in self.synced_songs.get(self.curr_song.song_name, [self.curr_song.song_name]) if Modifiers.hot not in self.songs[song_name].attributes["modifiers"]])
+
+        # if Modifiers.hot not in self.curr_song.attributes["modifiers"]:
+        #     self.songs_on_cooldown.append(self.curr_song)
         
-        if interlude: # Will be set to false when playing the first song so that everything saves BEFORE waiting and then playing each subsequent song
-            buffer:float = 0.5 # If the song was paused, wait a little for pause() to set self.playing to false before checking self.playing
-            wait(buffer)
-            if self.playing: # If this song has ended naturally and not because the user paused the player
+        buffer:float = 0.5 # If the song was paused, wait a little for pause() to set self.playing to false before checking self.playing
+        wait(buffer)
+        if self.playing: # If this song has ended naturally and not because the user paused the player
+            if not self.interlude_flag: # Interlude flag will be set to false when playing the first song so that everything saves BEFORE waiting and then playing each subsequent song
+                self.interlude_flag = True
+            else:
                 self.remaining_cooldown_indicator = "-" * self.COOLDOWN_BETWEEN_SONGS
                 
                 padding:float = ceil(buffer) - buffer
@@ -714,8 +737,7 @@ class spotify:
                     self.remaining_cooldown_indicator = "-" * seconds_remaining
 
         if song_is_queued:
-            self.remove_queued_item(remove_at_index = 0)
-        self.save()
+            self.remove_queued_item_at_index(0)
 
         self.curr_song.play() # Plays the song in the same thread as this method
 
@@ -851,7 +873,7 @@ Playback modes:
 
             currently_playing_line = f"Currently playing: {color(f'{self.curr_song.song_name : <{self._max_song_name_length}}', Colors.green)}   {color(f'{to_minutes_str(self.curr_song.curr_duration)}/{to_minutes_str(self.curr_song.duration)}', Colors.cyan) : <11} {indicators}"
             if self.remaining_cooldown_indicator: # If the cooldown is active, ensure that there is enough sapce for the maximum size of the indicator while also adding spaces to match the length of the line with its length when a song is playing
-                currently_playing_line:str = f"{self.remaining_cooldown_indicator : ^{max(len(currently_playing_line) - len(indicators) - 1 - self.COOLDOWN_BETWEEN_SONGS, self.COOLDOWN_BETWEEN_SONGS)}}"
+                currently_playing_line:str = f"{self.remaining_cooldown_indicator : ^{max(len(remove_tags(currently_playing_line)) - len(indicators) - 1 - self.COOLDOWN_BETWEEN_SONGS, self.COOLDOWN_BETWEEN_SONGS)}}"
             print(f"{currently_playing_line} | Playback mode: {color(f'{self.mode.name : <10}', Colors.orange)}")
             
             if not self.playing:
@@ -1007,7 +1029,7 @@ Playback modes:
         color_key = self.get_color_key(results, enabled_colors = enabled_colors)
 
         header_line:str = self.listing_info[list_type]["header line"]
-        # Print the header line and the color key (if applicable to list_type)
+        # Print the header line and the color key (if applicable for list_type)
         if list_type == ListModes.Queue:
             if len(set(results)) == 1: # If all the results are the same
                 self.remove_queued_item(song_name = results[0])
@@ -1259,18 +1281,14 @@ for file_name in file_names:
     song_name:str = file_name.replace(".wav", "")
 
     if not song_name.isascii(): # TODO Testing needed
-        invalid_indexes:"list[int]" = []
-        for i in range(len(song_name)):
+        for i in range(len(song_name) - 1, -1, -1):
             if not song_name[i].isascii():
-                invalid_indexes.append(i)
-
-        for index in invalid_indexes:
-            song_name = song_name[:index] + song_name[index + 1:]
+                song_name = song_name[:i] + song_name[i + 1:]
 
         alert = True
-        print(color(f"{file_name} was changed to {song_name} due to invalid character(s)", Colors.red))
+        print(color(f"{file_name}'s name was added as {song_name} due to invalid character(s)", Colors.red))
 
-    if (song_name in valid_commands.keys()) or song_name == "clear" or song_name == "": # Filter out any songs with the same name as a command
+    if (song_name in valid_commands.keys()) or song_name == "clear" or song_name == "*" or song_name == "": # Filter out any songs with the same name as a command
         alert = True
         print(color(f"{file_name} dropped due to name overlap with existing command!", Colors.red))
     else:
@@ -1283,7 +1301,7 @@ for i in range(len(song_names) - 1, -1, -1):
         if int(song_names[i]) <= len(valid_commands.keys()) + len(song_names): # Will error if the song name can't be casted to an int
             alert = True
             print(color(f"{song_names[i]} dropped due to name overlap with existing index!", Colors.red))
-            del songs[i]
+            del songs[song_names[i]]
             del song_names[i]
     except:
         continue
@@ -1299,11 +1317,12 @@ def play():
     player_thread = Thread(target = player.start, daemon = True)
     player_thread.start()
 
-    player.play_next_song(interlude = False) # Disable the waiting period before the first song
+    player.interlude_flag = False
+    player.play_next_song() # Disable the waiting period before the first song
 
     while True:
         if player.playing:
-            player.play_next_song(interlude = True) # Yields within 1.5 seconds after the player is paused
+            player.play_next_song() # Yields within 1.5 seconds after the player is paused
             # TODO If the user uses delayed exit, player.stop() called in play_next_song() will only kill this song-playing thread
         else:
             wait(0.5) # Wait and check whether the user has resumed the player
