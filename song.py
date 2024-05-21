@@ -4,6 +4,9 @@ from time import sleep as wait, time
 from wave import open as open_wav
 from typing import Union
 
+# from audioop
+# from wave import 
+
 from info import Modifiers, BASE_SONG_WEIGHT, STANDARD_SONG_LENGTH
 
 # time: a string representing a time in mm:ss.ss format
@@ -57,9 +60,6 @@ class Song:
         self.weight:int = self.BASE_WEIGHT
         self.cooldown:int = 3
 
-    def __str__(self) -> str:
-        return self.song_name
-
     def set_player(self, parent_player): # Call before playing the song
         self.player = parent_player
 
@@ -105,3 +105,10 @@ class Song:
         self.weight = self.BASE_WEIGHT
         for modifier in self.attributes["modifiers"]:
             self.weight = modifier.value["weight update"](self.weight, synced_songs_count)
+
+
+    def __str__(self) -> str:
+        return self.song_name
+    
+    def __repr__(self) -> str:
+        return f"{str(self)}\033[2m(Song)\033[0m"
