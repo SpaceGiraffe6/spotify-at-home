@@ -8,7 +8,7 @@ from difflib import get_close_matches
 from math import ceil
 
 from song import Song
-from info import Modifiers, Colors, SEQUENCES, EXCLUSIVE_MODIFIERS
+from info import TICK_DURATION, TIMER_RESOLUTION, Modifiers, Colors, SEQUENCES, EXCLUSIVE_MODIFIERS
 
 # Converts the number of seconds into a str in mm:ss format
 def to_minutes_str(seconds:int) -> str:
@@ -179,13 +179,13 @@ class spotify:
         if save_file.get("curr_song", None) in self.song_names:
             self.sequence.insert(0, self.songs[save_file["curr_song"]])
 
-        self.queue:list[Song] = [] #[self.songs[song_name] for song_name in save_file.get("queue", []) if song_name == "*" or (song_name in self.song_names)]
+        self.queue:list[Song] = []
         self.queue_song_names:list[str] = []
         for song_name in save_file.get("queue", []):
             if song_name == "*":
                 self.queue.append(None)
                 self.queue_song_names.append("*")
-                
+
             elif song_name in self.song_names:
                 self.queue.append(self.songs[song_name])
                 self.queue_song_names.append(song_name)
@@ -319,8 +319,8 @@ class spotify:
             file.write(str(curr_save_str))
         except:
             file.write(prev_save)
-            print(color("Save attempt failed due to an unsupported character!", Colors.red))
-            wait(3)
+            print(color("Save attempt failed due to a non-ASCII character!", Colors.red))
+            wait(5)
             clear_console()
 
         file.close()
@@ -330,6 +330,7 @@ class spotify:
         self.save()
         print("Program terminated via command!")
         self.terminated = True # Will break the loop propping up the main thread (at the end of the script)
+        wait(TICK_DURATION * 2) # Wait for the loop propping up the main thread to "realize" that self.terminated has become False
     # Stops the program after the current song ends
     def delayed_exit(self) -> None:
         self.exit_later = not self.exit_later
@@ -400,7 +401,7 @@ class spotify:
     def remove_queued_item_at_index(self, index:int) -> str:
         song_name:str = self.queue_song_names[index]
         try:
-            self.queue[index].attributes["queued"] = False # Will error if the song at index is a placeholder ("*")
+            self.queue[index].attributes["queued"] = False # Will error if the song at index is a placeholder "*"
         finally:
             del self.queue[index]
             del self.queue_song_names[index]
@@ -651,7 +652,7 @@ class spotify:
             self.encore_activated = True # Use the encore feature to restart the song that was paused
             self.interlude_flag = False # Temporarily disable the cooldown between songs
             self.playing = True # Resume the loop in the song-playing thread
-            wait(0.75) # Wait for the song-playing thread to set the next song
+            wait(TICK_DURATION + 0.25) # Wait for the song-playing thread to set the next song
 
         self.update_ui()
     def skip(self) -> None:
@@ -659,12 +660,12 @@ class spotify:
         PlaySound("1s_silence.wav", SND_ASYNC)
 
         print("Picking the next song...")
-        wait(1.5) # Wait for the current song's timer to stop
+        wait(1.5) # Wait for the current song's timer to stop. Song timers update every second independent of the TICK_DURATION duration
 
         self.interlude_flag = False
         self.playing = True # Resume the song-playing thread
 
-        wait(0.75) # Wait for the song-playing thread to set the next song (Must be longer than the waiting time in each iteration in the loop in play())
+        wait(TICK_DURATION + 0.25) # Wait for the song-playing thread to set the next song (Must be longer than the waiting time in each iteration in the loop in play())
         self.update_ui()
 
     # Repeat the current song an additional time
@@ -722,17 +723,15 @@ class spotify:
             del self.songs_on_cooldown[0]
         self.songs_on_cooldown.append([self.songs[song_name] for song_name in self.synced_songs.get(self.curr_song.song_name, [self.curr_song.song_name]) if Modifiers.hot not in self.songs[song_name].attributes["modifiers"]])
 
-        buffer:float = 0.5 # If the song was paused, wait a little for pause() to set self.playing to false before checking self.playing
-        wait(buffer)
+        wait(TICK_DURATION)
         if self.playing: # If this song has ended naturally and not because the user paused the player
             if not self.interlude_flag: # Interlude flag will be set to false when playing the first song so that everything saves BEFORE waiting and then playing each subsequent song
                 self.interlude_flag = True
             else:
                 self.remaining_cooldown_indicator = "-" * self.COOLDOWN_BETWEEN_SONGS
                 
-                padding:float = ceil(buffer) - buffer
-                wait(padding)
-                self.remaining_cooldown_indicator = self.remaining_cooldown_indicator[:len(self.remaining_cooldown_indicator) - 1]
+                wait(ceil(TICK_DURATION) - TICK_DURATION) # A TICK_DURATION of time has already been waited before self.playing was checked, so a TICK_DURATION has to be taken off the first second of wait time here
+                self.remaining_cooldown_indicator = self.remaining_cooldown_indicator[:len(self.remaining_cooldown_indicator) - 1] # Remove a character from the cooldown indicator after the first second
                 for seconds_remaining in range(self.COOLDOWN_BETWEEN_SONGS - 1, -1, -1):
                     wait(1)
                     self.remaining_cooldown_indicator = "-" * seconds_remaining
@@ -855,7 +854,7 @@ Playback modes:
                             elif time_elapsed >= lyrics[i + 1]["time"] or time_elapsed < 0: # time_elapsed will be negative if karaoke mode was somehow activates before the song updates its start time when song.play() is called
                                 break
 
-                            wait(0.1)
+                            wait(TIMER_RESOLUTION)
 
                     else: # If there are no more lyrics
                         wait(self.curr_song.duration - (time() - self.curr_song.start_time))
@@ -898,9 +897,7 @@ Playback modes:
                 print()
 
             command = input(f"Input command (Enter {color('help')} for help, {color('[space]')} to pause/resume, or enter nothing to refresh): ")
-        # if self.terminated:
-        #     exit()
-
+        
         if command.isspace():
             if self.playing:
                 valid_commands["pause"](self)
@@ -1255,19 +1252,19 @@ Playback modes:
 clear_console() # Clears any "hide cursor" characters in the console
 hide_cursor()
 
-intro_enabled:bool = False # Enable or disable the intro bit
+# For the funnies
+intro_enabled:bool = True # Enable or disable the intro bit
 if intro_enabled:
-    # Intro bit
     wait(0.9)
     print("\"Mom can we have Spotify?\"")
     wait(1)
     print("Mom: we have Spotify at home")
     wait(2)
 
-    # Will all be cleared once spotify initializes and the console clears when the first song plays
     clear_console()
+    # Will all be cleared once spotify initializes and the console clears when the first song plays
     wait(0.3)
-    print(f"spotify at home {color('<company name> <address> ©2023 All Rights Reserved', Colors.faint)}")
+    print(f"spotify at home {color('<company name> <address> ©2023 No Rights Reserved', Colors.faint)}")
     wait(1.9)
 
 DIRECTORY:str = "songs/" # Every file in this directory must be a playable wav file
@@ -1330,13 +1327,13 @@ def play():
     player.play_next_song()
 
     while True:
-        if not player.playing:
+        if player.playing:
             player.play_next_song() # Yields within 1.5 seconds after the player is paused
         else:
-            wait(0.5) # Wait and check whether the user has resumed the player
+            wait(TICK_DURATION) # Wait and check whether the user has resumed the player
 
 music_thread = Thread(target = play, daemon = True)
 music_thread.start()
 
 while not player.terminated: # Yields once the user exits the player, killing every thread
-    wait(0.5)
+    wait(TICK_DURATION)

@@ -7,7 +7,7 @@ from typing import Union
 # from audioop
 # from wave import 
 
-from info import Modifiers, BASE_SONG_WEIGHT, STANDARD_SONG_LENGTH
+from info import TIMER_RESOLUTION, Modifiers, BASE_SONG_WEIGHT, STANDARD_SONG_LENGTH
 
 # time: a string representing a time in mm:ss.ss format
 # converts and returns the time in seconds w/ decimals
@@ -79,7 +79,7 @@ class Song:
         while self.curr_duration < self.duration: # Loops roughly every second
             if self.player.playing == True:
                 while time() - self.start_time <= self.curr_duration: # curr_duration will be ahead of the actual duration by between 0-1 seconds
-                    wait(0.2)
+                    wait(TIMER_RESOLUTION)
                 self.curr_duration += 1
 
             else:

@@ -1,5 +1,8 @@
 from enum import Enum
 
+TICK_DURATION:float = 0.5 # seconds. Best if TICK_DURATION <= 1
+TIMER_RESOLUTION:float = 0.2 # seconds
+
 # ANSI color code format: \033[38;2;<r>;<g>;<b>m
     # or: \033[38;5;<color code>m
     # table of color codes at https://i.stack.imgur.com/KTSQa.png
