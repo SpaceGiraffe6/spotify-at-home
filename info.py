@@ -38,8 +38,18 @@ RATE_CHANGE:int = 3 # Percent increase/decrease of the chances for a hot/cold so
 class Modifiers(Enum):
     hot = {"color" : Colors.pink, "description" : "While in shuffle mode, increase the chance of a song being played and disables its cooldown", "weight update" : lambda curr_weight, *overflow : curr_weight*RATE_CHANGE}
     cold = {"color" : Colors.cool_blue, "description" : "While in shuffle mode, lower the chance of a song being played", "weight update" : lambda curr_weight, *overflow : round(curr_weight/RATE_CHANGE)}
-    disabled = {"color" : Colors.faint, "description" : "While in loop or shuffle mode, prevent this song from being played", "weight update" : lambda curr_weight, *overflow : 0}
+    # disabled = {"color" : Colors.faint, "description" : "While in loop or shuffle mode, prevent this song from being played", "weight update" : lambda curr_weight, *overflow : 0}
     synced = {"color" : Colors.aquamarine, "description" : "While in shuffle mode, consider each set of synced songs as one song when choosing the next song", "weight update" : lambda curr_weight, synced_songs_count : round(curr_weight/synced_songs_count)}
+MODIFIERS_COLORING_ORDER:"list[Modifiers]" = [Modifiers.hot, Modifiers.cold, Modifiers.synced]
+
+class SongAttributes(Enum):
+    playing = Colors.green
+    disabled = Colors.faint
+    queued = Colors.purple
+    sequenced = Colors.yellow
+    modifiers = None
+
+ATTRIBUTES_COLORING_ORDER:"list[SongAttributes]" = [SongAttributes.playing, SongAttributes.disabled, SongAttributes.queued, SongAttributes.sequenced, SongAttributes.modifiers]
 
 # Don't put the ".wav" after song names in the sequences dictionary
 SEQUENCES:"dict[str, list[str]]" = {"Sparkle - movie ver" : ["Nandemonaiya (English)"],

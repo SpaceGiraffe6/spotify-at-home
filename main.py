@@ -8,8 +8,8 @@ from difflib import get_close_matches
 from math import ceil
 
 from song import Song
-from info import TICK_DURATION, TIMER_RESOLUTION, Modifiers, Colors, SEQUENCES, EXCLUSIVE_MODIFIERS
-
+from info import TICK_DURATION, TIMER_RESOLUTION, Modifiers, Colors, SongAttributes, SEQUENCES, EXCLUSIVE_MODIFIERS
+from info import MODIFIERS_COLORING_ORDER, ATTRIBUTES_COLORING_ORDER
 # Converts the number of seconds into a str in mm:ss format
 def to_minutes_str(seconds:int) -> str:
     if type(seconds) == int:
@@ -145,7 +145,7 @@ class spotify:
     # Constants
     COOLDOWN_BETWEEN_SONGS:int = 8 # Seconds
     # When the playback mode is shuffle, the minimum number of songs that would have to play between each repeat
-    COOLDOWN_BETWEEN_REPEATS:int = 5 # Will be capped at len(playlist) - 1
+    COOLDOWN_BETWEEN_REPEATS:int = 5 # Will be capped at len(playlist) - 1 by the constructor
     
     SAVE_FILE_PATH:str = "save.file"
 
@@ -162,7 +162,7 @@ class spotify:
             if len(name) > self._max_song_name_length:
                 self._max_song_name_length = len(name)
             if song.song_name in SEQUENCES.keys():
-                song.attributes["sequenced"] = True
+                song.attributes[SongAttributes.sequenced] = True
 
             song.set_player(self)
         # For safe measure
@@ -174,10 +174,14 @@ class spotify:
         self.curr_song_index:int = 0
         self.mode:Modes = save_file.get("mode", Modes.Shuffle)
 
-        self.sequence:list[Song] = [self.songs[song_name] for song_name in save_file.get("sequence", []) if song_name in self.song_names]
+        self.sequence:list[str] = [song_name for song_name in save_file.get("sequence", []) if song_name in self.song_names]
         # Play the saved curr_song first, if there is a one
         if save_file.get("curr_song", None) in self.song_names:
-            self.sequence.insert(0, self.songs[save_file["curr_song"]])
+            self.sequence.insert(0, save_file["curr_song"])
+
+        self.disabled_song_names:set[str] = save_file.get("disabled", set())
+        for song_name in self.disabled_song_names:
+            self.songs[song_name].disable() # Avoid using self.disable_song() because it will print confirmation messages
 
         self.queue:list[Song] = []
         self.queue_song_names:list[str] = []
@@ -191,7 +195,7 @@ class spotify:
                 self.queue_song_names.append(song_name)
 
         # Modifiers that are hard-coded to songs here will be added to the saved modifiers
-        self.modifiers:dict[Modifiers, list[str]] = {Modifiers.hot : [], Modifiers.cold : [], Modifiers.disabled : []}
+        self.modifiers:dict[Modifiers, list[str]] = {Modifiers.hot : [], Modifiers.cold : []}
         for modifier in save_file.get("modifiers", []):
             if modifier in Modifiers:
                 self.modifiers.setdefault(modifier, [])
@@ -241,20 +245,22 @@ class spotify:
                 "header line" : f"Select a command, or a song to remove from the queue",
                 "special commands" : {"clear" : {"confirmation" : confirmation, "action" : self.clear_queue}},
                 "no results" : {"message" : "No songs found! Please check your spelling", "action" : self.list_queue},
-                "disabled color keys" : ["playing"],
+                "disabled color keys" : [SongAttributes.playing, SongAttributes.disabled, SongAttributes.sequenced, SongAttributes.modifiers],
                 "prompt" : f"Enter the index or the name of the song to remove ({color('q')}/{color('quit')} to cancel, {color('clear')} to clear queue): "
             },
             ListModes.Modifiers : {
                 "header line" : f"Select a modifier to remove it from all songs, or select a song to remove all modifiers from that song",
                 "special commands" : {"clear" : {"confirmation" : confirmation, "action" : self.remove_modifier}},
                 "no results" : {"message" : "No modifier found! Please check your spelling", "action" : self.list_active_modifiers},
-                "disabled color keys" : ["playing", "queued", "sequenced"],
+                "disabled color keys" : [SongAttributes.playing, SongAttributes.disabled, SongAttributes.queued, SongAttributes.sequenced],
                 "prompt" : f"Select a modifier to clear that modifier select a song to clear all of its modifiers ({color('clear')} to clear all modifiers): "
             },
             ListModes.Song : {
                 "header line" : "Select a command to run or a modifier to add/remove for {song_name}",
                 "special commands" : {"clear" : {"confirmation" : None, "action" : self.remove_modifier},
-                                        "enqueue" : {"confirmation" : None, "action" : self.enqueue}},
+                                        "enqueue" : {"confirmation" : None, "action" : self.enqueue},
+                                        "disable" : {"confirmation" : None, "action" : self.disable_song},
+                                        "enable" : {"confirmation" : None, "action" : self.enable_song}},
                 "no results" : {"message" : "No results found! Please check your spelling", "action" : self.list_song},
                 "disabled color keys" : [],
                 "prompt" : f"Select a modifier ({color('clear')} to clear all modifiers from this song, or {color('[space]')} to enqueue): "
@@ -266,6 +272,11 @@ class spotify:
                 "disabled color keys" : [],
                 "prompt" : f"Enter the index or the name of the result ({color('q')}/{color('quit')} to cancel): "
             }}
+        self.listing_colors:dict[str, bool] = {SongAttributes.playing : {"enabled" : True, "color" : SongAttributes.playing.value, "nameset" : None, "message" : "Currently playing"},
+                                                SongAttributes.disabled : {"enabled" : True, "color" : SongAttributes.disabled.value, "nameset" : self.disabled_song_names, "message" : "Disabled"},
+                                                SongAttributes.queued : {"enabled" : True, "color" : SongAttributes.queued.value, "nameset" : set(self.queue_song_names), "message" : "Queued"},
+                                                SongAttributes.sequenced : {"enabled" : True, "color" : SongAttributes.sequenced.value, "nameset" : set(SEQUENCES.keys()), "message" : "Has sequence"},
+                                                SongAttributes.modifiers : {"enabled" : True, "color" : None}}
 
     # Returns the number of songs synced with this song, including this song
     def get_synced_count(self, song_name:str) -> int:
@@ -273,7 +284,7 @@ class spotify:
         if pure_name in self.synced_songs:
             return len(self.synced_songs[pure_name])
         else:
-            return 1
+            return 1 # Becuase each song is technically always synced with itself
 
     # Call this after the thread that plays the songs has been started
     def start(self) -> None:
@@ -291,8 +302,9 @@ class spotify:
 
         curr_save:dict[str, any] = {"mode" : trim_enum_str(self.mode), 
                         "curr_song" : self.curr_song.song_name,
+                        "disabled" : self.disabled_song_names,
                         "queue" : self.queue_song_names, 
-                        "sequence" : [song.song_name for song in self.sequence], 
+                        "sequence" : self.sequence, 
                         "modifiers" : {trim_enum_str(modifier) : modifier_list for modifier, modifier_list in self.modifiers.items()}}
         curr_save_str:str = "{"
         for key, value in curr_save.items():
@@ -340,7 +352,7 @@ class spotify:
         if song_name:
             self.queue.append(self.songs[song_name])
             self.queue_song_names.append(song_name)
-            self.songs[song_name].attributes["queued"] = True
+            self.songs[song_name].attributes[SongAttributes.queued] = True
 
             clear_console()
             print(f"{color(song_name, Colors.purple)} added to queue!")
@@ -353,6 +365,8 @@ class spotify:
         self.update_ui()
 
     def clear_queue(self) -> None:
+        for song in self.queue:
+            song.attributes[SongAttributes.queued] = False
         self.queue.clear()
         self.queue_song_names.clear()
         print("Queue cleared!")
@@ -396,12 +410,13 @@ class spotify:
         block_until_input()
 
         self.update_ui()
+    # Helper function for remove_queued_item()
     # Removes an item without printing anything
     # Returns the name of the song that was removed
     def remove_queued_item_at_index(self, index:int) -> str:
         song_name:str = self.queue_song_names[index]
         try:
-            self.queue[index].attributes["queued"] = False # Will error if the song at index is a placeholder "*"
+            self.queue[index].attributes[SongAttributes.queued] = False # Will error if the song at index is a placeholder "*"
         finally:
             del self.queue[index]
             del self.queue_song_names[index]
@@ -413,7 +428,7 @@ class spotify:
             self.list_actions(["q", "quit", "clear"] + self.queue_song_names, list_type = ListModes.Queue) # Clears the console
         else:
             clear_console()
-            print("There are no queued or sequenced songs...")
+            print("There are no songs in the queue or an active sequence...")
             block_until_input()
 
             self.update_ui()
@@ -438,7 +453,7 @@ class spotify:
         overlaps:set[Modifiers] = set()
         for exclusive_set in EXCLUSIVE_MODIFIERS:
             if modifier in exclusive_set:
-                overlaps = overlaps | (self.songs[song_name].attributes["modifiers"] & exclusive_set)
+                overlaps = overlaps | (self.songs[song_name].attributes[SongAttributes.modifiers] & exclusive_set)
 
         if len(overlaps) == 0:
             clear_console()
@@ -447,14 +462,14 @@ class spotify:
             for overlap in overlaps:
                 modifier_strs.append(color(overlap.name, overlap.value["color"]))
             
-            message_argeement:str = "modifier conflicts"
+            message_agreement:str = "modifier conflicts"
             prompt_agreement:str = "this modifier"
             modifiers_sentence:str = fix_grammar(modifier_strs)
             if len(overlaps) > 1:
-                message_argeement = "modifiers conflict"
+                message_agreement = "modifiers conflict"
                 prompt_agreement = "these modifiers"
 
-            print(f"The {modifiers_sentence} {message_argeement} with the adding modifier!")
+            print(f"The {modifiers_sentence} {message_agreement} with the adding modifier!")
             if confirmation(message = f"Would you like to remove {prompt_agreement} and add the {color(modifier.name, modifier.value['color'])} modifier?"):
                 for overlap in overlaps:
                     self.remove_modifier(song_name = song_name, modifier = overlap, show_message = False)
@@ -518,7 +533,7 @@ class spotify:
         message:str = ""
         if not modifier:
             if song_name:
-                active_modifiers:set[Modifiers] = self.songs[song_name].attributes["modifiers"]
+                active_modifiers:set[Modifiers] = self.songs[song_name].attributes[SongAttributes.modifiers]
             
                 # Format and print the "modifier(s) cleared" message
                 if len(active_modifiers) == 0:
@@ -595,6 +610,25 @@ class spotify:
         else:
             print("Pure name not found in synced songs when desyncing songs!")
 
+    def disable_song(self, song_name:str) -> None:
+        self.disabled_song_names.add(song_name)
+        self.songs[song_name].disable()
+        clear_console()
+        print(f"Disabled {color(song_name, Colors.bold)}")
+        block_until_input()
+
+        self.update_ui()
+        return
+    def enable_song(self, song_name:str) -> None:
+        self.disabled_song_names.discard(song_name)
+        self.songs[song_name].enable()
+        clear_console()
+        print(f"Enabled {color(song_name, Colors.bold)}")
+        block_until_input()
+
+        self.update_ui()
+        return
+
     # Only call these playback functions from the play_next_song function
     # The playback mode functions will only run if the queue is empty
     # These functions will not add songs to the queue and will only set self.curr_song to the next song without playing it
@@ -604,22 +638,26 @@ class spotify:
             self.curr_song = self.songs[self.song_names[self.curr_song_index]]
             self.save()
     def loop(self) -> None:
-        index_changed:bool = False
-        song_name:str = ""
+        next_index:int = self.curr_song_index + 1
+        if next_index >= len(self.song_names):
+            next_index = 0
+        song_name:str = self.song_names[next_index]
 
-        while (not index_changed) or (song_name in self.modifiers[Modifiers.disabled]):
-            if self.curr_song_index < len(self.song_names) - 1:
-                self.curr_song_index += 1
-            else:
+        first_check:bool = False # Becomes True after the first time the loop checks the song at next_index so I can know if the loop has cycled through everything
+        while song_name in self.disabled_song_names:
+            self.curr_song_index += 1
+            if self.curr_song_index == next_index and first_check == True:
+                print(color("No available songs found!", Colors.red))
+                print("Playing next existing song...")
+                break
+            elif self.curr_song_index >= len(self.song_names):
                 self.curr_song_index = 0
-
-            index_changed = True
-            song_name = self.song_names[self.curr_song_index]
             
-        self.curr_song = self.songs[song_name]
+
+        self.curr_song = self.songs[self.song_names[self.curr_song_index]]
         self.save()
     def shuffle(self) -> None:
-        available_songs:list[Song] = list(set(self.songs.values()) - {song for cooldown_group in self.songs_on_cooldown for song in cooldown_group}) # Relative order of songs will be scrambled
+        available_songs:list[Song] = list(set(self.songs.values()) - {song for cooldown_group in self.songs_on_cooldown for song in cooldown_group} - {self.songs[song_name] for song_name in self.disabled_song_names}) # Relative order of songs will be scrambled
         if len(available_songs) > 1:
             total_weight:int = 0
             for song in available_songs:
@@ -633,10 +671,14 @@ class spotify:
                     self.curr_song_index = self.song_names.index(song.song_name)
                     break
         
-        # If there's only 1 available song
-        else: # The constructor would've caught/corrected the error if there are no available songs
-            self.curr_song = available_songs[0]
-            self.curr_song_index = self.song_names.index(self.curr_song.song_name)
+        # If there are no available songs
+        else: # The constructor would've caught/corrected the error if self.cooldown_between_repeats was too high
+            if len(self.disabled_song_names) > 0:
+                print("No available songs were found, so a song will be chosen completely randomly")
+                block_until_input()
+
+                self.curr_song_index = randint(0, len(self.song_names) - 1)
+                self.curr_song = self.songs[self.song_names[self.curr_song_index]]
 
         self.save()
 
@@ -675,8 +717,7 @@ class spotify:
         self.update_ui()
         return
 
-    # Only call this function from a separate thread (if playing a song)
-    # Adds a song to the queue if requested_song_name is provided
+    # Only call this function from a separate thread
     def play_next_song(self) -> None:
         song_is_queued:bool = False # Only used if the new curr_song is from the queue
 
@@ -685,7 +726,7 @@ class spotify:
             # Do nothing to curr_song and curr_song_index so the same song repeats
         else: # Don't update the sequence if the song is an encore
             if len(self.sequence) > 0: # Songs in the active sequence take priority over songs in the queue
-                song:Song = self.sequence[0]
+                song:Song = self.songs[self.sequence[0]]
                 del self.sequence[0]
                 self.curr_song = song
                 self.curr_song_index = self.song_names.index(song.song_name)
@@ -695,7 +736,7 @@ class spotify:
                 song:Song = self.queue[0]
                 if song:
                     if song.song_name not in self.queue_song_names: # In case this song was enqueued multiple times
-                        song.attributes["queued"] = False
+                        song.attributes[SongAttributes.queued] = False
 
                     self.curr_song = song
                     self.curr_song_index = self.song_names.index(song.song_name)
@@ -707,7 +748,7 @@ class spotify:
 
             # Only activate the sequence if there is not already an active sequence
             if len(self.sequence) == 0:
-                self.sequence = [self.songs[song_name] for song_name in SEQUENCES.get(self.curr_song.song_name, []) if song_name in self.song_names]
+                self.sequence = [song_name for song_name in SEQUENCES.get(self.curr_song.song_name, []) if song_name in self.song_names]
         
         # Delay on updating the save file if delayed exit is not toggled because there is a gap between when curr_song is set to the queued item and when the item is removed from the queue
         if self.exit_later:
@@ -721,7 +762,7 @@ class spotify:
         # Updates the songs on cooldown
         if len(self.songs_on_cooldown) >= self.COOLDOWN_BETWEEN_REPEATS:
             del self.songs_on_cooldown[0]
-        self.songs_on_cooldown.append([self.songs[song_name] for song_name in self.synced_songs.get(self.curr_song.song_name, [self.curr_song.song_name]) if Modifiers.hot not in self.songs[song_name].attributes["modifiers"]])
+        self.songs_on_cooldown.append([self.songs[song_name] for song_name in self.synced_songs.get(self.curr_song.song_name, [self.curr_song.song_name]) if Modifiers.hot not in self.songs[song_name].attributes[SongAttributes.modifiers]])
 
         wait(TICK_DURATION)
         if self.playing: # If this song has ended naturally and not because the user paused the player
@@ -761,21 +802,23 @@ Home screen indicators for some toggle-able commands will be listed in (parenthe
         # Commands
         print(f"""{color('list')}: list all of the songs in the playlist and optionally select one to queue
 {color('queue')}: list the queue and the active sequence (if any), and optionally remove a song from the queue
-    {color('*')}: enqueue a placeholder song based on the playback mode    [{color('Warning: will not be saved between sessions', Colors.red)}]
-{color('modifiers')}: list the active modifiers and optionally remove one or all modifiers from all songs
+    {color('*')}: enqueue a placeholder song chosen by the current playback mode
+{color('modifiers')}: list the active modifiers and optionally remove one more more modifiers
 {color('q')} or {color('quit')}: return to {color('and update', Colors.bold)} the menu
 Playback modes:
     {color('repeat')}: repeat the current song indefinitely
     {color('loop')}: loop through the playlist from the current song
     {color('shuffle')}: randomly select a song from the playlist
-{color('karaoke')}(🎤): turn on lyrics for this song    [{color('Warning: karaoke mode can’t be turned off until the song ends', Colors.red)}]
+{color('disable')}: stop this song from being automatically chosen by loop or shuffle mode   [{color('Only available when displaying song options', Colors.orange)}]
+{color('enable')}: undo the 'disable' command for the selected song   [{color('Only available when displaying song options', Colors.orange)}]
+{color('karaoke')}(🎤): turn on lyrics for this song   [{color('Karaoke mode can’t be turned off until the song ends', Colors.red)}]
 {color('encore')}(🔁): repeat the current song one more time
 {color('pause')}: pause the music player
 {color('resume')}: resume the music player and restart the current song
 {color('skip')} or [{color('>>')}]: stop the current song and play the next song
 {color('<song name>')}: list the available actions and modifiers for this song
 [{color('exit')}] or [{color('stop')}]: terminate the program
-{color('exit later')}(⌛): terminate the program after the current song ends    [{color('Tip: enter this command again to cancel it', Colors.green)}]""")
+{color('exit later')}(⌛): terminate the program after the current song ends   [{color('Enter this command again to cancel it', Colors.green)}]""")
 
         print()
         self.input_command(input("Enter a command: "))
@@ -786,6 +829,10 @@ Playback modes:
     # Lists the commands and modifier actions for a song
     def list_song(self, song_name:str, *overflow_args) -> None:
         results:list[str] = ["q", "quit", "enqueue", "clear"]
+        if song_name in self.disabled_song_names:
+            results.insert(2, "enable")
+        else:
+            results.insert(2, "disable")
         results += [modifier.name for modifier in list(self.modifiers.keys())]
 
         self.list_actions(results, list_type = ListModes.Song, listing_item_name = song_name)
@@ -934,21 +981,23 @@ Playback modes:
     # print_list is the list that the key is for
     # Key will only include the colors that will appear in print_list
     # Commands will always be colored blue
-    def get_color_key(self, print_list:"list[str]", enabled_colors:"dict[str, bool]" = {"playing" : {"enabled" : True, "color" : Colors.green}, "queued" : {"enabled" : True, "color" : Colors.purple}, "sequenced" : {"enabled" : True, "color" : Colors.yellow}, "modifiers" : {"enabled" : True, "color" : None}}) -> str:
+    def get_color_key(self, print_list:"list[str]") -> str:
         print_list:set[str] = set(print_list)
         # List and sets can't be keys in a dictionary
-        info:list[dict[str, any]] = [{"enabled" : enabled_colors["playing"]["enabled"], "nameset" : {self.curr_song.song_name}, "color" : enabled_colors["playing"]["color"], "message" : "Currently playing"},
-                                    {"enabled" : enabled_colors["queued"]["enabled"], "nameset" : set(self.queue_song_names), "color" : enabled_colors["queued"]["color"], "message" : "Queued"},
-                                    {"enabled" : enabled_colors["sequenced"]["enabled"], "nameset" : set(SEQUENCES.keys()), "color" : enabled_colors["sequenced"]["color"], "message" : "Has sequence"}]
+        self.listing_colors[SongAttributes.playing]["nameset"] = {self.curr_song.song_name}
+        info:list[dict[str, any]] = [self.listing_colors[SongAttributes.playing],
+                                    self.listing_colors[SongAttributes.disabled],
+                                    self.listing_colors[SongAttributes.queued],
+                                    self.listing_colors[SongAttributes.sequenced]]
         key:str = ""
 
-        for item in info:
-            if item["enabled"] and len(item["nameset"] & print_list) > 0:
+        for attribute in info:
+            if attribute["enabled"] and len(attribute["nameset"] & print_list) > 0:
                 if key: # If there is already something in the key
                     key += " | "
-                key += f"{color(item['message'], item['color'])}"
+                key += f"{color(attribute['message'], attribute['color'])}"
 
-        if enabled_colors["modifiers"]["enabled"]:
+        if self.listing_colors[SongAttributes.modifiers]["enabled"]:
             for modifier, modifier_list in self.modifiers.items():
                 if len(set(modifier_list) & print_list) > 0: # If a song with the modifier is in print_list
                     if key: # If there is already something in the key
@@ -963,14 +1012,9 @@ Playback modes:
     # results must be in the order of [commands, modifiers, songs]
     def list_actions(self, results:"list[str]", list_type:ListModes = None, listing_item_name:str = None) -> None:
         clear_console()
-        # KEYS IN enabled_colors MUST MATCH EXISTING KEYS IN EACH SONG'S ATTRIBUTES
-        enabled_colors:dict[str, bool] = {"playing" : {"enabled" : True, "color" : Colors.green},
-                                        "queued" : {"enabled" : True, "color" : Colors.purple},
-                                        "sequenced" : {"enabled" : True, "color" : Colors.yellow},
-                                        "modifiers" : {"enabled" : True, "color" : None}}
         special_commands:dict[str, dict[str, function]] = self.listing_info[list_type]["special commands"] # Each key is the name of the command, and the value is a dict where "confirmation" is the function that asks the user to confirm (None if no confirmation needed) that returns True/False, and "action" is the function to run if the user confirms
 
-        list_separators_enabled:bool = False # Whether to show the separators between commands, modifiers, and songs when listing the results. Will interfere with the list of the current sequence
+        list_separators_enabled:bool = False # Whether to show the separators between commands, modifiers, and songs when listing the results. Will interfere when used while listing the current sequence
 
         # Handle cases where there are no valid results or only 1 valid result
         if len(results) == 0:
@@ -1006,7 +1050,7 @@ Playback modes:
                 if list_type == ListModes.Modifiers:
                     self.remove_modifier(modifier = Modifiers[result])
                 elif list_type == ListModes.Song:
-                    if len({Modifiers[result]} & self.songs[listing_item_name].attributes["modifiers"]) == 0:
+                    if len({Modifiers[result]} & self.songs[listing_item_name].attributes[SongAttributes.modifiers]) == 0:
                         self.add_modifier(listing_item_name, Modifiers[result])
                     else:
                         self.remove_modifier(song_name = listing_item_name, modifier = Modifiers[result])
@@ -1029,10 +1073,16 @@ Playback modes:
             return
         
         # If more than 1 result
-        for disabled_key in self.listing_info[list_type]["disabled color keys"]:
-            enabled_colors[disabled_key]["enabled"] = False
+        for color_key in self.listing_colors.keys():
+            if color_key in self.listing_info[list_type]["disabled color keys"]:
+                self.listing_colors[color_key]["enabled"] = False
+            else:
+                self.listing_colors[color_key]["enabled"] = True
 
-        color_key = self.get_color_key(results, enabled_colors = enabled_colors)
+        print(self.listing_colors)
+        block_until_input
+
+        color_key = self.get_color_key(results)
 
         header_line:str = self.listing_info[list_type]["header line"]
         # Print the header line and the color key (if applicable for list_type)
@@ -1067,7 +1117,7 @@ Playback modes:
             else:
                 print("No active sequence")
 
-            color_key:str = self.get_color_key(results, enabled_colors = enabled_colors)
+            color_key:str = self.get_color_key(results)
             if len(color_key) > 0:
                 print(f"{color_key : <{left_margin + (len(color_key) - len(remove_tags(color_key)))}}", end = "")
                 
@@ -1078,7 +1128,7 @@ Playback modes:
 
         count:int = 1
         def get_sequence_line():
-            seq_song:Song = self.sequence[count - 1]
+            seq_song:Song = self.songs[self.sequence[count - 1]]
             return (separator + color(f"{str(count) + '. ' : <{max_sequence_digits + 2}}", Colors.faint) + color(seq_song.song_name, Colors.yellow) + f" {color('-' * (self._max_song_name_length - len(seq_song.song_name) + 1), Colors.faint)} {color(to_minutes_str(seq_song.duration), Colors.cyan)}")
 
         commands_finished:bool = False # Whether all the commands in results have been listed
@@ -1103,7 +1153,7 @@ Playback modes:
                         line = f"{str(count) + '.' : <{max_digits + 1}} {color(result, modifier.value['color'])}{color('  - ' + modifier.value['description'], Colors.faint)}"
                     elif list_type == ListModes.Song:
                         action_type:str = ""
-                        if len({modifier} & self.songs[listing_item_name].attributes["modifiers"]) == 1:
+                        if len({modifier} & self.songs[listing_item_name].attributes[SongAttributes.modifiers]) == 1:
                             action_type = "(remove)"
                         else:
                             action_type = "(add)"
@@ -1128,19 +1178,24 @@ Playback modes:
                     result_song:Song = self.songs[result]
                     # THIS IS THE PINNACLE OF UI DESIGN
                     name:str = result
-                    applied_colors:list[str] = []
+                    applied_colors:list[Colors] = []
                     overflow_dashes = ""
-                    # Color the currently playing song green (if listed), color any other queued songs purple, and color songs with sequences light yellow
-                    for key, value in result_song.attributes.items():
-                        if enabled_colors[key]["enabled"] and enabled_colors[key]["color"] and value:
-                            applied_colors.append(enabled_colors[key]["color"])
 
-                    if enabled_colors["modifiers"]["enabled"]:
-                        for modifier in result_song.attributes["modifiers"]:
-                            if modifier == Modifiers.disabled: # The disabled modifier is always shown first
-                                applied_colors.insert(0, modifier.value['color'])
-                            else:
-                                applied_colors.append(modifier.value['color'])
+                    prev_listing_colors:list[Colors] = result_song.get_prev_listing_colors()
+                    if prev_listing_colors != None:
+                        applied_colors = prev_listing_colors.copy()
+                    else:
+                        # Color the currently playing song green (if listed), color any other queued songs purple, and color songs with sequences yellow
+                        for key in ATTRIBUTES_COLORING_ORDER:
+                            if self.listing_colors[key]["enabled"] and self.listing_colors[key]["color"] and result_song.attributes[key]:
+                                applied_colors.append(self.listing_colors[key]["color"])
+
+                        if self.listing_colors[SongAttributes.modifiers]["enabled"]:
+                            for modifier in MODIFIERS_COLORING_ORDER:
+                                if modifier in result_song.attributes[SongAttributes.modifiers]:
+                                    applied_colors.append(modifier.value['color'])
+
+                        result_song.prev_listing_colors = applied_colors.copy()
 
                     if len(applied_colors) > 0:
                         name = color(name, applied_colors[0])
@@ -1149,7 +1204,7 @@ Playback modes:
                         overflow_dashes += color(overflow_chars, curr_color)
 
                     # I can't explain how this line works even if I tried
-                    line = f"{str(count) + '.' : <{max_digits + 1}} {name} {overflow_dashes}{color('-' * (self._max_song_name_length - len(result) - len(applied_colors)*len(overflow_chars) + (len(Modifiers) + len(enabled_colors))*len(overflow_chars)), Colors.faint)} {color(to_minutes_str(self.songs[result].duration), Colors.cyan)}"
+                    line = f"{str(count) + '.' : <{max_digits + 1}} {name} {overflow_dashes}{color('-' * (self._max_song_name_length - len(result) - len(applied_colors)*len(overflow_chars) + (len(Modifiers) + len(self.listing_colors) - 1)*len(overflow_chars)), Colors.faint)} {color(to_minutes_str(self.songs[result].duration), Colors.cyan)}"
                 
             if line: # Don't do anything if line is an empty string
                 print(f"{line : <{left_margin + (len(line) - len(remove_tags(line)))}}", end = "")
@@ -1253,7 +1308,7 @@ clear_console() # Clears any "hide cursor" characters in the console
 hide_cursor()
 
 # For the funnies
-intro_enabled:bool = True # Enable or disable the intro bit
+intro_enabled:bool = False # Enable or disable the intro bit
 if intro_enabled:
     wait(0.9)
     print("\"Mom can we have Spotify?\"")

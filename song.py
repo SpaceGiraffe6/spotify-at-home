@@ -3,17 +3,16 @@ from math import ceil
 from time import sleep as wait, time
 from wave import open as open_wav
 from typing import Union
+from enum import Enum
 
-# from audioop
-# from wave import 
-
-from info import TIMER_RESOLUTION, Modifiers, BASE_SONG_WEIGHT, STANDARD_SONG_LENGTH
+from info import Modifiers, Colors, SongAttributes, BASE_SONG_WEIGHT, STANDARD_SONG_LENGTH
 
 # time: a string representing a time in mm:ss.ss format
 # converts and returns the time in seconds w/ decimals
 def to_seconds(time:str) -> float:
     time:list[str] = time.split(":")
     return (int(time[0]) * 60) + float(time[1])
+
 
 class Song:
     # File name includes the path to the file
@@ -30,10 +29,14 @@ class Song:
         self.start_time = None
 
         # KEYS IN attributes MUST MATCH KEYS IN enabled_colors IN spotify.list_actions
-        self.attributes:dict[str, Union(bool, set)] = {"playing" : False, # This attribute is updated from the play function, not from Spotify
-                                        "queued" : False,
-                                        "sequenced" : False,
-                                        "modifiers" : set()}
+        self.attributes:dict[str, Union(bool, set)] = {SongAttributes.playing : False, # This attribute is updated from the play function, not from Spotify
+                                                        SongAttributes.disabled : False,
+                                                        SongAttributes.queued : False,
+                                                        SongAttributes.sequenced : False,
+                                                        SongAttributes.modifiers : set()}
+        self.prev_attributes:dict[str, Union(bool, set)] = None
+        self.prev_listing_colors:list[Colors] = None
+        self.sequence:list[str] = []
 
         # Each item in lyrics is a dictionary representing a line in the form of {"time" : start time of this line, "text" : the line's text}
         # lyrics will be None if no lyrics text file 
@@ -60,16 +63,26 @@ class Song:
         self.weight:int = self.BASE_WEIGHT
         self.cooldown:int = 3
 
+    def __str__(self) -> str:
+        return self.song_name
+
+    def get_prev_listing_colors(self) -> "list[Colors]":
+        if self.attributes != self.prev_attributes: # Return the colors that were last used for this song if none of the song's attributes have been changed since then
+            self.prev_attributes = self.attributes.copy()
+            return None
+        else:
+            return self.prev_listing_colors
+
     def set_player(self, parent_player): # Call before playing the song
         self.player = parent_player
 
     def play(self):
-        self.attributes["playing"] = True
+        self.attributes[SongAttributes.playing] = True
 
         PlaySound(self.file_name, SND_ASYNC)
         self.start_timer() # Blocks the song-playing thread until the song is finished or interrupted
 
-        self.attributes["playing"] = False
+        self.attributes[SongAttributes.playing] = False
 
     # Don't call this function from the main thread
     def start_timer(self) -> None:
@@ -79,36 +92,40 @@ class Song:
         while self.curr_duration < self.duration: # Loops roughly every second
             if self.player.playing == True:
                 while time() - self.start_time <= self.curr_duration: # curr_duration will be ahead of the actual duration by between 0-1 seconds
-                    wait(TIMER_RESOLUTION)
+                    wait(0.2)
                 self.curr_duration += 1
 
             else:
                 self.curr_duration -= 1
                 break
 
+    def disable(self) -> None:
+        self.attributes[SongAttributes.disabled] = True
+        self.recalculate_weight(synced_songs_count = None) # synced_songs_count won't be used if the song is disabled
+
+    def enable(self) -> None:
+        self.attributes[SongAttributes.disabled] = False
+        self.recalculate_weight(synced_songs_count = self.player.get_synced_count(self.song_name))
+
     # Pass in nothing to modifiers to only update the weight based on synced_songs_count
     # Adding a modifier that has already been added won't do anything
     def add_modifiers(self, synced_songs_count:int = 1, *modifiers:"tuple[Modifiers]") -> None:
-        self.attributes["modifiers"] = self.attributes["modifiers"] | set(modifiers)
+        self.attributes[SongAttributes.modifiers] = self.attributes[SongAttributes.modifiers] | set(modifiers)
         self.recalculate_weight(synced_songs_count)
 
     def remove_modifiers(self, synced_songs_count:int = 1, *modifiers:"tuple[Modifiers]") -> None:
-        self.attributes["modifiers"] = self.attributes["modifiers"] - set(modifiers)
+        self.attributes[SongAttributes.modifiers] = self.attributes[SongAttributes.modifiers] - set(modifiers)
         self.recalculate_weight(synced_songs_count)
 
     def clear_modifiers(self) -> None:
-        self.attributes["modifiers"].clear()
+        self.attributes[SongAttributes.modifiers].clear()
         self.weight = self.BASE_WEIGHT
 
     # Only called from within this object
     def recalculate_weight(self, synced_songs_count:int) -> None:
-        self.weight = self.BASE_WEIGHT
-        for modifier in self.attributes["modifiers"]:
-            self.weight = modifier.value["weight update"](self.weight, synced_songs_count)
-
-
-    def __str__(self) -> str:
-        return self.song_name
-    
-    def __repr__(self) -> str:
-        return f"{str(self)}\033[2m(Song)\033[0m"
+        if self.attributes[SongAttributes.disabled]:
+            self.weight = 0
+        else:
+            self.weight = self.BASE_WEIGHT
+            for modifier in self.attributes[SongAttributes.modifiers]:
+                self.weight = modifier.value["weight update"](self.weight, synced_songs_count)
