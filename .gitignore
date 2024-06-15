@@ -14,6 +14,5 @@ save.file
 # Ignore the testing file
 testing.py
 
-# IDK what these files are but I'm too scared to delete them
-__pycache__/info.cpython-37.pyc
-__pycache__/song.cpython-37.pyc
+# IDK what this file is but I'm too scared to delete it
+__pycache__/*

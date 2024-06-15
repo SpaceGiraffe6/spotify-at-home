@@ -1079,9 +1079,6 @@ Playback modes:
             else:
                 self.listing_colors[color_key]["enabled"] = True
 
-        print(self.listing_colors)
-        block_until_input
-
         color_key = self.get_color_key(results)
 
         header_line:str = self.listing_info[list_type]["header line"]
