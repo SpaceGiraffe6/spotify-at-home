@@ -1,7 +1,7 @@
 # Ignore the local settings
 /.vscode
 
-# Ignore all .wav files under songs
+# Ignore all .wav song files under songs
 songs/*.wav
 
 # Ignore all files under lyrics except read_this.txt
@@ -9,7 +9,7 @@ lyrics/**
 !read_this.txt
 
 # Ignore the save file
-save.file
+save_file.json
 
 # Ignore the testing file
 testing.py
