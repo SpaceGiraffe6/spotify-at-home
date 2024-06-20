@@ -13,7 +13,6 @@ def to_seconds(time:str) -> float:
     time:list[str] = time.split(":")
     return (int(time[0]) * 60) + float(time[1])
 
-
 class Song:
     # File name includes the path to the file
     def __init__(self, song_name:str, file_name:str):
@@ -102,10 +101,17 @@ class Song:
     def disable(self) -> None:
         self.attributes[SongAttributes.disabled] = True
         self.recalculate_weight(synced_songs_count = None) # synced_songs_count won't be used if the song is disabled
-
     def enable(self) -> None:
         self.attributes[SongAttributes.disabled] = False
         self.recalculate_weight(synced_songs_count = self.player.get_synced_count(self.song_name))
+
+    def update_sequence(self, sequence:"list[str]"):
+        if sequence:
+            self.attributes[SongAttributes.sequenced] = True
+            self.sequence = sequence
+        else:
+            self.attributes[SongAttributes.sequenced] = False
+            self.sequence = []
 
     # Pass in nothing to modifiers to only update the weight based on synced_songs_count
     # Adding a modifier that has already been added won't do anything
