@@ -202,16 +202,11 @@ class spotify:
 
         # Modifiers that are hard-coded to songs here will be added to the saved modifiers
         self.modifiers:dict[Modifiers, list[str]] = {Modifiers.hot : [], Modifiers.cold : []}
-        # for modifier in [Modifiers[modifier_name] for modifier_name in save_file.get("modifiers", [])]:
-        #     if modifier in Modifiers:
-        #         self.modifiers.setdefault(modifier, [])
-        #         for modified_song_name in [self.songs[song].song_name for song in save_file["modifiers"][modifier]]:
-        #             if modified_song_name in self.song_names and modified_song_name not in self.modifiers[modifier]:
-        #                 self.modifiers[modifier].append(modified_song_name)
         # Fills in any modifiers not covered by the hard-coded modified songs or the modifiers in the save file
         for modifier in Modifiers:
             self.modifiers.setdefault(modifier, [])
-            self.modifiers[modifier].extend(save_file["modifiers"][modifier.name])
+            if "modifiers" in save_file:
+                self.modifiers[modifier].extend(save_file["modifiers"][modifier.name])
 
             # Add this modifier to the songs that are initialized with the modifier
             # Temporarily set the synced count of all songs to 1
@@ -691,7 +686,7 @@ class spotify:
         self.songs[song_name].disable()
         if not silent:
             clear_console()
-            print(f"{color(song_name, Colors.bold)} will be chosen automatically no more...")
+            print(f"{color(song_name, Colors.bold)} will be automatically chosen no more...")
             block_until_input()
 
             self.update_ui()
@@ -700,7 +695,7 @@ class spotify:
         self.songs[song_name].enable()
         if not silent:
             clear_console()
-            print(f"{color(song_name, Colors.bold)} can now be chosen automatically")
+            print(f"{color(song_name, Colors.bold)} can now be automatically chosen")
             block_until_input()
 
             self.update_ui()
