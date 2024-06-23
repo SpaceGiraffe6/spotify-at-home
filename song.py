@@ -3,7 +3,6 @@ from math import ceil
 from time import sleep as wait, time
 from wave import open as open_wav
 from typing import Union
-from enum import Enum
 
 from info import Modifiers, Colors, SongAttributes, BASE_SONG_WEIGHT, STANDARD_SONG_LENGTH
 
@@ -39,7 +38,7 @@ class Song:
 
         # Each item in lyrics is a dictionary representing a line in the form of {"time" : start time of this line, "text" : the line's text}
         # lyrics will be None if no lyrics text file 
-        self.lyrics:list[dict[str, Union(int, str)]] = None
+        self.lyrics:list[dict[str, Union(int, str)]] = None # Each lyric line will not have a newline character at the end
         try:
             lines:list[str] = open(f"lyrics/{self.song_name}.txt", "r").readlines() # Will error if no lyrics file with the same name as the song is found
 
@@ -55,7 +54,7 @@ class Song:
 
                 self.lyrics.append({"time" : to_seconds(line[:line.index(" ")]), "text" : line[line.index(" ") + 1:]})
         except:
-            self.lyrics = None # If something is wrong with the lyrics' formatting and only some of the lyrics were added
+            self.lyrics = None # In case something is wrong with the lyrics' formatting and only some of the lyrics were added
             pass
         
         self.BASE_WEIGHT:int = BASE_SONG_WEIGHT + max(-BASE_SONG_WEIGHT//5, min(BASE_SONG_WEIGHT//5, (STANDARD_SONG_LENGTH - self.duration)//8)) # Slightly increase the weights of shorter songs and vice versa

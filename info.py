@@ -36,8 +36,8 @@ STANDARD_SONG_LENGTH:int = 180 # Used to scale the weight of each song by its le
 BASE_SONG_WEIGHT:int = 120 # because its divisible by almost everything
 RATE_CHANGE:int = 3 # Percent increase/decrease of the chances for a hot/cold song to be chosen, in decimal form
 class Modifiers(Enum):
-    hot = {"color" : Colors.pink, "description" : "While in shuffle mode, increase the chance of a song being played and disables its cooldown", "weight update" : lambda curr_weight, *overflow : round(curr_weight*RATE_CHANGE)}
-    cold = {"color" : Colors.cool_blue, "description" : "While in shuffle mode, decrease the chance of a song being played", "weight update" : lambda curr_weight, *overflow : round(curr_weight/RATE_CHANGE)}
+    hot = {"color" : Colors.pink, "description" : "While in shuffle mode, increase the chance of a song being played and disables its cooldown", "weight update" : lambda curr_weight, *_ : round(curr_weight*RATE_CHANGE)}
+    cold = {"color" : Colors.cool_blue, "description" : "While in shuffle mode, decrease the chance of a song being played", "weight update" : lambda curr_weight, *_ : round(curr_weight/RATE_CHANGE)}
     synced = {"color" : Colors.aquamarine, "description" : "While in shuffle mode, consider each set of synced songs as one song when choosing the next song", "weight update" : lambda curr_weight, synced_songs_count : round(curr_weight/synced_songs_count)}
 MODIFIERS_COLORING_ORDER:"list[Modifiers]" = [Modifiers.hot, Modifiers.cold, Modifiers.synced]
 
@@ -47,12 +47,7 @@ class SongAttributes(Enum):
     queued = Colors.purple
     sequenced = Colors.yellow
     modifiers = None
-ATTRIBUTES_COLORING_ORDER:"list[SongAttributes]" = [SongAttributes.playing, SongAttributes.disabled, SongAttributes.queued, SongAttributes.sequenced, SongAttributes.modifiers]
-
-# Don't put the ".wav" after song names in the sequences dictionary
-SEQUENCES:"dict[str, list[str]]" = {"Sparkle - movie ver" : ["Nandemonaiya (English)"],
-            "Snowdin Town" : ["His Theme", "Home"],
-            "Brave Song (Piano)" : ["Qingyun Peak"]}
+ATTRIBUTES_COLORING_ORDER:"list[SongAttributes]" = [SongAttributes.disabled, SongAttributes.playing, SongAttributes.queued, SongAttributes.sequenced, SongAttributes.modifiers]
 
 # Each song can only have up to one of the modifiers in each set at the same time
 EXCLUSIVE_MODIFIERS:"list[set[Modifiers]]" = [{Modifiers.hot, Modifiers.cold}]

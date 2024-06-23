@@ -94,7 +94,7 @@ def search_for_item(search:str, search_list:"list[str]", index_search_list:"list
         return results
 
     # If the user made a typo in the search and no matches were found
-    shortened_results:list[str] = get_close_matches(search, [short_name for short_name, *overflow_values in search_pairs]) # The higher the cutoff parameter (between 0 and 1), the stricter the search will be
+    shortened_results:list[str] = get_close_matches(search, [short_name for short_name, *_ in search_pairs]) # The higher the cutoff parameter (between 0 and 1), the stricter the search will be
     
     return [name for short_name, name in search_pairs if short_name in shortened_results]
 # Removes repeat values from target in-place and returns a new, edited list
@@ -339,7 +339,7 @@ class spotify:
         self.save()
         print("Program terminated via command!")
         self.terminated = True # Will break the loop propping up the main thread (at the end of the script)
-        wait(TICK_DURATION * 2) # Wait for the loop propping up the main thread to "realize" that self.terminated has become False
+        exit() # Kill this thread so the rest of the code won't keep running if stop() was called from list_actions()
     # Stops the program after the current song ends
     def delayed_exit(self) -> None:
         self.exit_later = not self.exit_later
@@ -457,7 +457,7 @@ class spotify:
 
         return song_name
     
-    def list_queue(self, *overflow_args) -> None:
+    def list_queue(self, *_) -> None:
         if len(self.queue) > 0 or len(self.sequence) > 0:
             list_type:ListModes = ListModes.Queue
             result:str = self.list_actions(["q", "quit", "clear"] + self.queue_song_names, list_type = list_type) # Clears the console
@@ -473,7 +473,7 @@ class spotify:
 
             self.update_ui()
 
-    def list_active_modifiers(self, *overflow_args) -> None:
+    def list_active_modifiers(self, *_) -> None:
         active_modifier_names:list[str] = []
         # Add the songs with modifiers
         modified_song_names:list[str] = []
@@ -885,7 +885,7 @@ Playback modes:
 {color('karaoke')}(🎤): turn on lyrics for this song   [{color('Karaoke mode can’t be turned off until the song ends', Colors.red)}]
 {color('encore')}(🔁): repeat the current song one more time
 {color('pause')}: pause the music player
-{color('resume')}: resume the music player and restart the current song
+{color('resume')}: resume the music player {color("and restart the current song", Colors.underline)}
 {color('skip')} or [{color('>>')}]: stop the current song and play the next song
 {color('<song name>')}: list the available actions and modifiers for this song
 [{color('exit')}] or [{color('stop')}]: terminate the program
@@ -894,7 +894,7 @@ Playback modes:
         print()
         self.input_command(input("Enter a command: "))
 
-    def list_songs(self, *overflow_args) -> None: # Requesting a song while another song is playing will queue the requested song instead
+    def list_songs(self, *_) -> None: # Requesting a song while another song is playing will queue the requested song instead
         result:str = self.list_actions(["q", "quit", "*"] + self.song_names, list_type = ListModes.Songs)
         if result:
             if result == "*":
@@ -905,7 +905,7 @@ Playback modes:
                 self.handle_invalid_result()
         # Do nothing if result is None
     # Lists the commands and modifier actions for a song
-    def list_song(self, song_name:str, *overflow_args) -> None:
+    def list_song(self, song_name:str, *_) -> None:
         results:list[str] = ["q", "quit", "enqueue", "clear"]
         if song_name in self.disabled_song_names:
             results.insert(2, "enable")
@@ -928,8 +928,8 @@ Playback modes:
         # Do nothing if result is None
     
     def karaoke(self) -> None:
-        delay:float = 0 # Number of seconds to delay the lyrics by to compensate for lag
-        max_display_range:int = 16 # Max number of lines before/after the current line of lyrics to display
+        delay:float = 0.3 # Number of seconds to delay the lyrics by to compensate for lag
+        max_display_range:int = 10 # Max number of lines before/after the current line of lyrics to display
         lyrics:list[dict[str, any]] = self.curr_song.lyrics # Each line's text includes a newline character at the end
 
         if not lyrics:
@@ -943,23 +943,23 @@ Playback modes:
             for i in range(len(lyrics)):
                 if i == len(lyrics) - 1 or lyrics[i + 1]["time"] >= time() - self.curr_song.start_time - delay:
                     display_width:int = get_terminal_size().columns
-                    display_height:int = get_terminal_size().lines - 1
+                    display_height:int = get_terminal_size().lines
                     display_range:int = min((display_height - 1) // 2, max_display_range) # How many lines before/after the current line of lyrics to display
+                    empty_line:str = " " * display_width
                     if prev_display_height != display_height:
                         clear_console()
-                        #hide_cursor()
+                        hide_cursor()
                         prev_display_height = display_height
                     else:
                         cursor_up(lines = display_height)
-                    input()
 
-                    print((" " * display_width + "\n") * (display_height - min(display_range, i) - display_range - 1), end = "") # Vertically center the lyrics by adding newline paddings before printing the lyric lines
-                    input()
-                    for prev_line_index in range(i - display_range, i):
+                    # Print the lines before the current line
+                    print(empty_line * max((display_height - 1)//2 - display_range, 0)) # Vertically center the lyrics by adding newline paddings before printing the lyric lines
+                    for prev_line_index in range(i - display_range + 1, i):
                         if prev_line_index >= 0:
                             print(color(f"{lyrics[prev_line_index]['text'] : ^{display_width}}", Colors.faint))
                         else:
-                            print()
+                            print(empty_line)
 
                     curr_line:str = lyrics[i]["text"]
                     print(f'{curr_line : ^{display_width}}')
@@ -968,19 +968,19 @@ Playback modes:
                     if i < len(lyrics) - 1:
                         for next_line_index in range(i + 1, i + display_range + 1):
                             if next_line_index < len(lyrics):
-                                print(color(f'{lyrics[next_line_index]["text"] : ^{display_width}}', Colors.faint))
+                                print(color(f'{lyrics[next_line_index]["text"] : ^{display_width}}', Colors.faint), end = "")
                             else:
-                                print()
+                                print(empty_line)
 
                         notes_count:int = curr_line.count("\u2669")
                         segment_time:float = (lyrics[i + 1]["time"] - lyrics[i]["time"]) / (notes_count + 1) # The time between this lyric and the next one is divided into equal segments, with one note lighting up in between each segment
                         notes_shown:int = 0
                         if notes_count:
-                            cursor_up(lines = display_range + 1) # Move the cursor to the beginning of the currently playing lyric line
+                            cursor_up(lines = display_range) # Move the cursor to the beginning of the currently playing lyric line
                             print(" " * ((display_width - len(curr_line)) // 2), end = "")
 
                         # Wait until the time of the next line has been reached
-                        # Keeps the offset between the lyrics and the song due to lag to within 0.1s
+                        # Keeps the offset between the lyrics and the song due to lag to within TIMER_RESOLUTION seconds
                         while True:
                             time_elapsed:float = time() - self.curr_song.start_time - delay
 
@@ -994,7 +994,7 @@ Playback modes:
                             wait(TIMER_RESOLUTION)
 
                     else: # If there are no more lyrics
-                        wait(self.curr_song.duration - (time() - self.curr_song.start_time))
+                        wait(self.curr_song.duration - (time() - self.curr_song.start_time)) # Wait until the current song ends
                         self.update_ui()
     
     def update_ui(self, command:str = "") -> None: # The command parameter is used when update_ui() is called via self.listing_info
@@ -1117,13 +1117,10 @@ Playback modes:
             self.listing_info[list_type]["no results"]["action"](listing_item_name)
             return
 
-        elif len(results) == 1:
-            # if result == "*":
-            #     self.enqueue()
+        elif len(results) == 1: # Something is guaranteed to be returned by this function if there is only 1 item in results
             result = results[0]
             if result in valid_commands.keys():
                 valid_commands[result](self)
-
             elif result in special_commands.keys():
                 # The functions in special_commands either have no parameters or a parameter called "song_name"
                 # listing_item_name will be None if list_type is Modifiers, so the remove_modifiers method would still clear all modifiers
@@ -1134,28 +1131,8 @@ Playback modes:
                         special_commands[result]["action"]()
                 else: # If the user doesn't confirm
                     listmode_actions[list_type](self)
-            
             else:
                 return result
-
-            # elif result in [modifier.name for modifier in Modifiers]: # Result is name of modifier
-            #     if list_type == ListModes.Modifiers:
-            #         self.remove_modifier(modifier = Modifiers[result])
-            #     elif list_type == ListModes.Song:
-            #         if len({Modifiers[result]} & self.songs[listing_item_name].attributes[SongAttributes.modifiers]) == 0:
-            #             self.add_modifier(listing_item_name, Modifiers[result])
-            #         else:
-            #             self.remove_modifier(song_name = listing_item_name, modifier = Modifiers[result])
-
-            # elif result in self.song_names:
-            #     if list_type == ListModes.Queue:
-            #         self.remove_queued_item(song_name = result)
-            #     # Song names won't be included in the results when listing options for a song
-            #     elif list_type == ListModes.Modifiers:
-            #         self.remove_modifier(song_name = result)
-            #     else: # If list_type is Songs or none
-            #         self.list_song(result)
-            return
 
         # If more than 1 result
         for color_key in self.listing_colors.keys():
@@ -1384,7 +1361,9 @@ Playback modes:
                         "shuffle" : set_mode_shuffle,
                         "stop" : stop,
                         "exit" : stop,
-                        "exit later" : delayed_exit
+                        "exit later" : delayed_exit,
+
+                        "new sequence" : create_sequence
                         }
 
     global exact_commands
@@ -1409,14 +1388,14 @@ if intro_enabled:
     print(f"spotify at home {color('<company name> <address> ©2023 No Rights Reserved', Colors.faint)}")
     wait(1.9)
 
-DIRECTORY:str = "songs/" # Every file in this directory must be a playable wav file
+DIRECTORY:str = "songs/" # Every file in this directory must be a playable wav file except the file with song_instructions_file_name
 songs:"dict[str, Song]" = {}
 song_names:"list[str]" = []
 alert:bool = False
 file_names:"list[str]" = listdir(DIRECTORY)
-songs_instructions_file_name:str = "read_this.txt" # This text file must be in the "songs" directory
+SONGS_INSTRUCTIONS_FILE_NAME:str = "read_this.txt" # This text file must be in the "songs" directory
 try:
-    file_names.remove(songs_instructions_file_name)
+    file_names.remove(SONGS_INSTRUCTIONS_FILE_NAME)
 except:
     print(color("Instructions file not found in songs!", Colors.red))
     alert = True
