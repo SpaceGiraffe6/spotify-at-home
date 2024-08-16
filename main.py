@@ -10,8 +10,7 @@ from typing import Union
 import json
 
 from song import Song
-from info import TICK_DURATION, TIMER_RESOLUTION, Modifiers, Colors, SongAttributes, EXCLUSIVE_MODIFIERS
-from info import MODIFIERS_COLORING_ORDER, ATTRIBUTES_COLORING_ORDER
+from info import LYRIC_PLACEHOLDER_CHARACTER, TICK_DURATION, TIMER_RESOLUTION, Modifiers, Colors, SongAttributes, EXCLUSIVE_MODIFIERS, MODIFIERS_COLORING_ORDER, ATTRIBUTES_COLORING_ORDER
 # Converts the number of seconds into a str in mm:ss format
 def to_minutes_str(seconds:int) -> str:
     if type(seconds) == int:
@@ -109,7 +108,7 @@ def remove_duplicates(target:list) -> list:
 
     return processed_list
 
-# Remove any parenthesized tags in the song name and return the new song name
+# Remove any parenthesized tags in the song name and return the distilled song name
 def get_pure_song_name(song_name:str) -> str:
     try:
         return song_name[:song_name.index("(") - 1] # Minus 1 to exclude the space in front of the parentheses
@@ -142,8 +141,9 @@ class ListModes(Enum):
     Song = 1
     Queue = 2
     Modifiers = 3
-    ListConstruction = 4
-    SequenceCreation = 5
+    ListCreation = 4
+    Sequences = 5
+    Sequence = 6
 
 class spotify:
     # Constants
@@ -178,12 +178,13 @@ class spotify:
 
         self.curr_song:Song = None
         self.curr_song_index:int = 0
+        self.bookmark_index:int = None # Only used to prevent the index increments from being disrupted by sequences while in loop mode. Stores the index of the song that activated the sequence and resets to None after each sequence ends
         self.mode:Modes = Modes[save_file.get("mode", "Shuffle")] # Default to shuffle mode
 
         self.sequence:list[str] = [song_name for song_name in save_file.get("active_sequence", []) if song_name in self.song_names]
         # Play the saved curr_song first, if there is a one
         if save_file.get("curr_song", None) in self.song_names:
-            self.sequence.insert(0, save_file["curr_song"])
+            self.sequence.insert(0, save_file["curr_song"]) # Don't call play_next_song() here as it will be called from another thread
 
         self.disabled_song_names:set[str] = set(save_file.get("disabled", set())) # self.save() converts sets to lists before saving as json
         for song_name in self.disabled_song_names:
@@ -228,7 +229,7 @@ class spotify:
 
         self.sequences:dict[str, list[str]] = save_file.get("sequences", {})
 
-        self.remaining_cooldown_indicator:str = "" # Indicates how much time is left for the cooldown period between this song and the next one
+        self.remaining_interlude_indicator:str = "" # Indicates how much time is left for the cooldown period between this song and the next one
         self.COOLDOWN_BETWEEN_REPEATS:int = min(len(self.song_names) - 1, self.COOLDOWN_BETWEEN_REPEATS)
         self.songs_on_cooldown:list[list[Song]] = []
 
@@ -271,12 +272,26 @@ class spotify:
                 "disabled color keys" : [],
                 "prompt" : f"Select a modifier ({color('clear')} to clear all modifiers from this song, or {color('[space]')} to enqueue): "
             },
-            ListModes.ListConstruction : {
+            ListModes.ListCreation : {
                 "header line" : f"Add an item to the list",
-                "special commands" : {"finish" : {"confirmation" : None, "action" : lambda:True}, "change previous" : {"confirmation" : None, "action" : lambda:-1}},
+                "special commands" : {"change" : {"confirmation" : None, "action" : lambda:-1}, "finish" : {"confirmation" : None, "action" : lambda:True}},
                 "no results" : {"message" : "No results found! Please check your spelling", "action" : lambda:None},
                 "disabled color keys" : [],
-                "prompt" : f"Enter the index or the name of the item to add ({color('q')}/{color('quit')} to cancel and return to home screen): "
+                "prompt" : f"Enter the index(es) of the item(s) to add, separated by commas ({color('q')}/{color('quit')} to cancel and return to home screen): "
+            },
+            ListModes.Sequences : {
+                "header line" : f"Select a numbered song to view its sequence",
+                "special commands" : {"new" : {"confirmation" : None, "action" : self.create_sequence}, "clear" : {"confirmation" : confirmation, "action" : lambda:[self.clear_sequence(lead_song_name) for lead_song_name in self.sequences.keys()]}},
+                "no results" : {"message" : "No results found! Please check your spelling", "action" : self.list_sequences},
+                "disabled color keys" : [SongAttributes.sequenced],
+                "prompt" : f"Enter the index or name of a song ({color('new')} to create a new sequence, {color('clear')} to clear all sequences): "
+            },
+            ListModes.Sequence : {
+                "header line" : f"Select any existing song to add/remove it to/from the sequence",
+                "special commands" : {"clear" : {"confirmation" : confirmation, "action" : self.clear_sequence}},
+                "no results" : {"message" : "No results found! Please check your spelling", "action" : self.update_ui},
+                "disabled color keys" : [],
+                "prompt" : f"Enter the index or name of a song ({color('clear')} to remove the whole sequence): "
             },
             None : {
                 "header line" : f"Which one do you mean?",
@@ -306,7 +321,7 @@ class spotify:
             self.update_ui()
         else:
             print("No valid audio files found!")
-            block_until_input("Press enter to exit")
+            block_until_input(message = "Press enter to exit")
             exit()
     # Rewrites the save file
     def save(self) -> None:
@@ -314,16 +329,6 @@ class spotify:
             "mode" : self.mode.name,
             "curr_song" : self.curr_song.song_name,
             "disabled" : list(self.disabled_song_names),
-            "queue" : self.queue_song_names,
-                        "queue" : self.queue_song_names, 
-            "queue" : self.queue_song_names,
-                        "queue" : self.queue_song_names, 
-            "queue" : self.queue_song_names,
-                        "queue" : self.queue_song_names, 
-            "queue" : self.queue_song_names,
-                        "queue" : self.queue_song_names, 
-            "queue" : self.queue_song_names,
-                        "queue" : self.queue_song_names, 
             "queue" : self.queue_song_names,
             "active_sequence" : self.sequence,
             "modifiers" : {modifier.name : modifier_list for modifier, modifier_list in self.modifiers.items()},
@@ -345,28 +350,58 @@ class spotify:
         self.exit_later = not self.exit_later
         self.update_ui()
 
-    def create_list(self, selection_pool:"list[any]") -> Union[list, None]:
-        selection_pool:list[any] = selection_pool.copy()
-        created_list:list[any] = []
-        while selection_pool:
-            result:str = self.list_actions(selection_pool, list_type = ListModes.ListConstruction)
-            if result == None: # If the user cancels the list creation
-                return None
-            elif result == True: # If the user uses the special command "finish"
-                return created_list
-            elif result == -1: # If the user goes back to change the last value in the created list
-                if len(created_list) > 0:
-                    selection_pool.append(created_list[-1])
-                    del created_list[-1]
-                else:
-                    print("\nThere are no previous items!")
-                    block_until_input()
-            else: # If the user chooses something from the selection pool (all command inputs will be handled by list_actions)
-                created_list.append(result)
-                selection_pool.remove(result)
+    def create_list(self, selection_pool:"list[any]", header_line:str = "") -> Union[list, None]:
+        # selection_pool:list[any] = selection_pool.copy()
+        # created_list:list[any] = []
+        # while selection_pool:
+        #     clear_console()
+        #     if not header_line:
+        #         header_line = self.listing_info[ListModes.ListCreation]["header line"]
+        #     print(header_line)
+        #     print(f"Selected items: {str(created_list)}")
 
-        if len(selection_pool) == 0:
-            return created_list
+        #     result:str = self.list_actions(["q", "quit", "change", "finish"] + selection_pool, list_type = ListModes.ListCreation, autoclear_console = False)
+        #     if result == None: # If the user cancels the list creation
+        #         return None
+        #     elif result == True: # If the user uses the special command "finish"
+        #         return created_list
+        #     elif result == -1: # If the user goes back to change the last value in the created list
+        #         if len(created_list) > 0:
+        #             selection_pool.append(created_list[-1])
+        #             del created_list[-1]
+        #         else:
+        #             print("\nThere are no previous items!")
+        #             block_until_input()
+        #     else: # If the user chooses something from the selection pool (all command inputs will be handled by list_actions)
+        #         created_list.append(result)
+        #         selection_pool.remove(result)
+
+        # if len(selection_pool) == 0:
+        #     return created_list
+
+        if not header_line:
+            header_line = self.listing_info[ListModes.ListCreation]["header line"]
+
+        enabled_commands:list[str] = ["q", "quit"]
+        while True:
+            clear_console()
+            print(header_line)
+            result_string:str = self.list_actions(enabled_commands + selection_pool, list_type = ListModes.ListCreation, autoclear_console = False)
+
+            if result_string:
+                created_list:list[str] = []
+                try: # Errors if one of the results can't be casted to an int
+                    results:list[int] = [int(result) - len(enabled_commands) - 1 for result in result_string.replace(" ", "").split(",")]
+                    for index in results:
+                        if index >= 0 and index < len(selection_pool):
+                            created_list.append(selection_pool[index])
+                        else:
+                            raise NotImplementedError
+
+                    return created_list # The function calling this create_list will handle cases where length of created_list is 0
+                finally:    
+                    print("\nInvalid list item!")                      
+                    block_until_input()
 
     def create_sequence(self) -> None:
         valid_song_names:list[str] = [song_name for song_name in self.song_names if song_name not in self.sequences]
@@ -374,12 +409,60 @@ class spotify:
         if lead_song_name:
             if lead_song_name in valid_song_names:
                 valid_song_names.remove(lead_song_name)
-                sequence:list[str] = self.create_list(valid_song_names)
-                if sequence: # If the user didn't cancel
-                    self.songs[lead_song_name].update_sequence(sequence)
+                sequence:list[str] = self.create_list(valid_song_names, header_line = f"Creating a sequence for {color(lead_song_name, Colors.bold)}")
+                if sequence != None: # If the user didn't cancel
+                    clear_console()
+                    if len(sequence) > 0:
+                        self.songs[lead_song_name].update_sequence(sequence)
+                        self.sequences[lead_song_name] = sequence
+                        
+                        print(f"Added {fix_grammar(sequence, Colors.bold)} to the sequence of {color(lead_song_name, SongAttributes.sequenced.value)}")
+                        block_until_input()
+                        self.update_ui()
+                    else:
+                        print(color("No songs were added to the new sequence!", Colors.red))
+                        block_until_input()
+                        self.list_sequences()
+
             else:
                 self.handle_invalid_result()
         # Do nothing if list_actions returns None
+
+    def list_sequences(self, *_) -> None:
+        result:str = self.list_actions(["q", "quit", "new"] + list(self.sequences.keys()), list_type = ListModes.Sequences)
+        if result in self.sequences.keys(): # If result isn't None
+            self.list_sequence(result)
+
+    def list_sequence(self, song_name:str, *_) -> None:
+        sequence:list[str] = self.sequences[song_name]
+        result:str = self.list_actions(["q", "quit", "clear"] + sequence, list_type = ListModes.Sequence, listing_item_name = song_name)
+        if result == None:
+            return
+
+        clear_console()
+        if result in sequence:
+            if len(sequence) == 1:
+                self.clear_sequence(result)
+            else:
+                sequence.remove(result)
+            print(f"Removed {color(result, Colors.bold)} from the sequence of {color(song_name, SongAttributes.sequenced.value)}")
+
+        elif result in self.song_names:
+            sequence.append(result)
+            print(f"Added {color(result, Colors.bold)} to the sequence of {color(song_name, SongAttributes.sequenced.value)}")
+
+        block_until_input()
+        self.update_ui()
+
+    def clear_sequence(self, song_name:str, silent:bool = False) -> None:
+        del self.sequences[song_name]
+        self.songs[song_name].attributes[SongAttributes.sequenced] = False
+
+        if not silent:
+            clear_console()
+            print(f"Cleared the sequence of {color(song_name, Colors.bold)}")
+            block_until_input()
+            self.update_ui()
 
     def enqueue(self, song_name:str = None) -> None:
         if song_name:
@@ -407,9 +490,9 @@ class spotify:
 
         block_until_input()
         self.update_ui()
+    # If only remove_at_index is provided, then only remove the song in the queue at that index
     # If only song_name is provided, then remove all occurrences of that song from the queue
     # If song_name and remove_at_occurrence are provided, then remove that occurrence of the song from the queue
-    # If only remove_at_index is provided, then only remove the song in the queue at that index
     def remove_queued_item(self, song_name:str = None, remove_at_occurrence:int = None, remove_at_index:int = None) -> None:
         removals:int = 0
         
@@ -425,13 +508,15 @@ class spotify:
                     occurrences.reverse()
                     song_name = self.remove_queued_item_at_index(occurrences[remove_at_occurrence])
                     removals += 1
-                # Do nothing here if remove_at_occurrence is invalid
+                # Do nothing here if remove_at_occurrence is an invalid number
             elif len(occurrences) > 0:
                 song_name = self.queue_song_names[occurrences[0]]
                 for i in occurrences:
                     self.remove_queued_item_at_index(i)
 
                 removals += len(occurrences)
+        
+        # Print the information about the removals
         if removals == 0:
             print()
             print(f"\"{color(song_name, Colors.bold)}\" wasn\'t found in the queue!")
@@ -452,8 +537,8 @@ class spotify:
         song_name:str = self.queue_song_names[index]
         del self.queue_song_names[index]
         del self.queue[index]
-        if song_name != "*" and (song_name not in self.queue_song_names): # Only set the queued attribute to False if no more instances of this song remain in the queue after this removal
-            self.songs[self.song_names[index]].attributes[SongAttributes.queued] = False
+        if song_name != "*" and (song_name not in self.queue_song_names): # Only set the queued attribute to False if no more occurrences of this song remain in the queue after this removal
+            self.songs[song_name].attributes[SongAttributes.queued] = False
 
         return song_name
     
@@ -709,26 +794,31 @@ class spotify:
             self.curr_song = self.songs[self.song_names[self.curr_song_index]]
             self.save()
     def loop(self) -> None:
-        next_index:int = self.curr_song_index + 1
-        if next_index >= len(self.song_names):
-            next_index = 0
-        song_name:str = self.song_names[next_index]
+        if self.bookmark_index != None:
+            self.curr_song_index = self.bookmark_index
+            self.bookmark_index = None
+        song_name:str = self.increment_song_index()
 
         first_check:bool = False # Becomes True after the first time the loop checks the song at next_index so I can know if the loop has cycled through everything
+        stop_index:int = self.curr_song_index
         while song_name in self.disabled_song_names:
-            self.curr_song_index += 1
-            if self.curr_song_index == next_index and first_check == True:
-                print(color("No available songs found!", Colors.red))
-                print("Playing next existing song...")
-                break
-            elif self.curr_song_index >= len(self.song_names):
-                self.curr_song_index = 0
-            
+            if self.curr_song_index == stop_index:
+                if not first_check:
+                    first_check = True
+                else: # If this loop has looped back to where it started, meaning that every song is disabled
+                    print(color("No available songs found!", Colors.red))
+                    print("Playing next existing song...")
+                    break
+            song_name = self.increment_song_index()
 
-        self.curr_song = self.songs[self.song_names[self.curr_song_index]]
+        self.curr_song = self.songs[song_name]
+        if song_name in self.sequences:
+            self.bookmark_index = self.curr_song_index
+
         self.save()
     def shuffle(self) -> None:
         available_songs:list[Song] = list(set(self.songs.values()) - {song for cooldown_group in self.songs_on_cooldown for song in cooldown_group} - {self.songs[song_name] for song_name in self.disabled_song_names}) # Relative order of songs will be scrambled
+        # No need to recalculate the weight of synced songs here since it was already calculated when the song was synced
         if len(available_songs) > 1:
             total_weight:int = 0
             for song in available_songs:
@@ -745,13 +835,21 @@ class spotify:
         # If there are no available songs
         else: # The constructor would've caught/corrected the error if self.cooldown_between_repeats was too high
             if len(self.disabled_song_names) > 0:
-                print("No available songs were found, so a song will be chosen completely randomly")
+                print("No available songs were found, so a song will be chosen randomly")
                 block_until_input()
 
                 self.curr_song_index = randint(0, len(self.song_names) - 1)
                 self.curr_song = self.songs[self.song_names[self.curr_song_index]]
 
         self.save()
+    # Helper function
+    # Automatically makes curr_song_index wrap around when it equals/exceeds the length of song_names
+    def increment_song_index(self, increment:int = 1) -> str: # Returns the name of the song at the new index
+        self.curr_song_index += increment % len(self.song_names)
+        if self.curr_song_index >= len(self.song_names): # Wrap around
+            self.curr_song_index -= len(self.song_names)
+        
+        return self.song_names[self.curr_song_index]
 
     def pause(self) -> None:
         if self.playing:
@@ -762,10 +860,14 @@ class spotify:
     # Resuming the player will restart the song that was playing before the pause
     def resume(self) -> None:
         if not self.playing:
-            self.encore_activated = True # Use the encore feature to restart the song that was paused
+            if self.remaining_interlude_indicator: # If the player was paused in the middle of an interlude
+                self.remaining_interlude_indicator = ""
+            else: # The new song would've already been set during the interlude but wouldn't've started to play yet
+                self.encore_activated = True # Use the encore feature to prevent play_next_song() from picking a new song
+            
             self.interlude_flag = False # Temporarily disable the cooldown between songs
             self.playing = True # Resume the loop in the song-playing thread
-            wait(TICK_DURATION + 0.25) # Wait for the song-playing thread to set the next song
+            wait(TICK_DURATION + 0.5) # Wait for the song-playing thread to prepare the next song
 
         self.update_ui()
     def skip(self) -> None:
@@ -790,8 +892,6 @@ class spotify:
 
     # Call this function from the song-playing thread
     def play_next_song(self) -> None:
-        song_is_queued:bool = False # Only used if the new curr_song is from the queue
-
         if self.encore_activated:
             self.encore_activated = False
             # Do nothing to curr_song and curr_song_index so the same song repeats
@@ -803,17 +903,14 @@ class spotify:
                 self.curr_song_index = self.song_names.index(song.song_name)
             
             elif len(self.queue) > 0:
-                song_is_queued = True
                 song:Song = self.queue[0]
                 if song:
-                    if song.song_name not in self.queue_song_names: # In case this song was enqueued multiple times
-                        song.attributes[SongAttributes.queued] = False
-
                     self.curr_song = song
                     self.curr_song_index = self.song_names.index(song.song_name)
                 else: # If the queued song is a placeholder
                     mode_actions[self.mode](self)
-            
+                
+                self.remove_queued_item_at_index(0) # Silently remove the item
             else:
                 mode_actions[self.mode](self) # Select the next song based on the current playback mode
 
@@ -823,8 +920,6 @@ class spotify:
         
         # Delay on updating the save file if delayed exit is not toggled because there is a gap between when curr_song is set to the queued item and when the item is removed from the queue
         if self.exit_later:
-            if song_is_queued:
-                self.remove_queued_item()
             self.save()
             self.stop()
             return
@@ -840,16 +935,15 @@ class spotify:
             if not self.interlude_flag: # Interlude flag will be set to false when playing the first song so that everything saves BEFORE waiting and then playing each subsequent song
                 self.interlude_flag = True
             else:
-                self.remaining_cooldown_indicator = "-" * self.COOLDOWN_BETWEEN_SONGS
+                self.remaining_interlude_indicator = "-" * self.COOLDOWN_BETWEEN_SONGS
                 
                 wait(ceil(TICK_DURATION) - TICK_DURATION) # A TICK_DURATION of time has already been waited before self.playing was checked, so a TICK_DURATION has to be taken off the first second of wait time here
-                self.remaining_cooldown_indicator = self.remaining_cooldown_indicator[1:] # Remove a character from the cooldown indicator after the first second
+                self.remaining_interlude_indicator = self.remaining_interlude_indicator[1:] # Remove a character from the cooldown indicator after the first second
                 for seconds_remaining in range(self.COOLDOWN_BETWEEN_SONGS - 1, -1, -1):
                     wait(1)
-                    self.remaining_cooldown_indicator = "-" * seconds_remaining
-
-        if song_is_queued: # Keep the first queued song in the queue until it actually starts playing
-            self.remove_queued_item_at_index(0)
+                    if not self.playing: # If the player was paused during the interlude
+                        return # Jump back to the loop in play()
+                    self.remaining_interlude_indicator = "-" * seconds_remaining
 
         self.curr_song.play() # Plays the song in the same thread as this method
 
@@ -939,19 +1033,18 @@ Playback modes:
         else:
             clear_console()
             hide_cursor()
-            prev_display_height:int = -1
+            display_width:int = get_terminal_size().columns
+            display_height:int = get_terminal_size().lines
             for i in range(len(lyrics)):
                 if i == len(lyrics) - 1 or lyrics[i + 1]["time"] >= time() - self.curr_song.start_time - delay:
-                    display_width:int = get_terminal_size().columns
-                    display_height:int = get_terminal_size().lines
-                    display_range:int = min((display_height - 1) // 2, max_display_range) # How many lines before/after the current line of lyrics to display
-                    empty_line:str = " " * display_width
-                    if prev_display_height != display_height:
+                    if display_height != get_terminal_size().lines:
                         clear_console()
                         hide_cursor()
-                        prev_display_height = display_height
+                        display_height = get_terminal_size().lines
                     else:
                         cursor_up(lines = display_height)
+                    display_range:int = min((display_height - 1) // 2, max_display_range) # How many lines before/after the current line of lyrics to display
+                    empty_line:str = " " * display_width
 
                     # Print the lines before the current line
                     print(empty_line * max((display_height - 1)//2 - display_range, 0)) # Vertically center the lyrics by adding newline paddings before printing the lyric lines
@@ -972,7 +1065,7 @@ Playback modes:
                             else:
                                 print(empty_line)
 
-                        notes_count:int = curr_line.count("\u2669")
+                        notes_count:int = curr_line.count(LYRIC_PLACEHOLDER_CHARACTER)
                         segment_time:float = (lyrics[i + 1]["time"] - lyrics[i]["time"]) / (notes_count + 1) # The time between this lyric and the next one is divided into equal segments, with one note lighting up in between each segment
                         notes_shown:int = 0
                         if notes_count:
@@ -986,7 +1079,7 @@ Playback modes:
 
                             if notes_shown < notes_count and time_elapsed >= lyrics[i]["time"] + ((notes_shown + 1) * segment_time):
                                 notes_shown += 1
-                                print(color('\u2669 ', Colors.bold), end = "")
+                                print(color(LYRIC_PLACEHOLDER_CHARACTER + ' ', Colors.bold), end = "")
 
                             elif time_elapsed >= lyrics[i + 1]["time"] or time_elapsed < 0: # time_elapsed will be negative if karaoke mode was somehow activates before the song updates its start time when song.play() is called
                                 break
@@ -1010,24 +1103,28 @@ Playback modes:
                 if condition == True:
                     indicators.append(indicator)
 
-            # Both conditionals will set indicators to a string
-            if len(indicators):
-                indicators:str = "| " + " ".join(indicators)
-            else:
-                indicators = ""
+            # indicators will become a string either way
+            indicators:str = "| " + " ".join(indicators) if len(indicators) else ""
 
             currently_playing_line = f"Currently playing: {color(f'{self.curr_song.song_name : <{self._max_song_name_length}}', Colors.green)}   {color(f'{to_minutes_str(self.curr_song.curr_duration)}/{to_minutes_str(self.curr_song.duration)}', Colors.cyan) : <11} {indicators}"
-            if self.remaining_cooldown_indicator: # If the cooldown is active, ensure that there is enough sapce for the maximum size of the indicator while also adding spaces to match the length of the line with its length when a song is playing
-                currently_playing_line:str = f"{self.remaining_cooldown_indicator : ^{max(len(remove_tags(currently_playing_line)) - len(indicators) - 1 - self.COOLDOWN_BETWEEN_SONGS, self.COOLDOWN_BETWEEN_SONGS)}}"
+            if self.remaining_interlude_indicator: # If the cooldown is active, ensure that there is enough sapce for the maximum size of the indicator while also adding spaces to match the length of the line with its length when a song is playing
+                currently_playing_line:str = f"{self.remaining_interlude_indicator : ^{max(len(remove_tags(currently_playing_line)) - len(indicators) - 1 - self.COOLDOWN_BETWEEN_SONGS, self.COOLDOWN_BETWEEN_SONGS)}}"
             print(f"{currently_playing_line} | Playback mode: {color(f'{self.mode.name : <10}', Colors.orange)}")
             
+            if self.remaining_interlude_indicator:
+                print(f"Next song: {color(self.curr_song.song_name, Colors.bold)}")
+
             if not self.playing:
                 print("--Player paused--")
             print()
             # List the queue if it's not empty
-            if len(self.queue) > 0:
-                print("Queued songs: ")
-                max_index_len:int = len(str(len(self.queue) - 1))
+            if len(self.queue) > 0 or len(self.sequence) > 0:
+                print("Next up:")
+                max_index_len:int = len(str(len(self.queue)))
+                for song_name in self.sequence:
+                    print(f"{'-  ' : <{max_index_len + 2}}{color(song_name, SongAttributes.sequenced.value)}")
+                
+                # Print the queue
                 for i in range(len(self.queue)):
                     print(f"{f'{i + 1}. ' : <{max_index_len + 2}}{color(self.queue_song_names[i], Colors.purple)}")
 
@@ -1105,8 +1202,9 @@ Playback modes:
         return key
       
     # results must be in the order of [commands, modifiers, songs]
-    def list_actions(self, results:"list[str]", list_type:ListModes = None, listing_item_name:str = None) -> None:
-        clear_console()
+    def list_actions(self, results:"list[str]", list_type:ListModes = None, listing_item_name:str = None, autoclear_console:bool = True) -> None:
+        if autoclear_console:
+            clear_console()
         special_commands:dict[str, dict[str, function]] = self.listing_info[list_type]["special commands"] # Each key is the name of the command, and the value is a dict where "confirmation" is the function that asks the user to confirm (None if no confirmation needed) that returns True/False, and "action" is the function to run if the user confirms
         list_separators_enabled:bool = False # Whether to show the separators between commands, modifiers, and songs when listing the results. Will interfere when used while listing the current sequence
 
@@ -1117,7 +1215,7 @@ Playback modes:
             self.listing_info[list_type]["no results"]["action"](listing_item_name)
             return
 
-        elif len(results) == 1: # Something is guaranteed to be returned by this function if there is only 1 item in results
+        elif len(results) == 1: # Something is guaranteed to be returned here if there is only 1 item in results
             result = results[0]
             if result in valid_commands.keys():
                 valid_commands[result](self)
@@ -1272,7 +1370,10 @@ Playback modes:
                     print(get_sequence_line(), end = "")
                 elif list_type == ListModes.Modifiers and commands_finished == True and modifiers_finished == False: # If the listing mode is Modifiers and this result is a modifier, list the songs with each modifier in an indented, unnumbered, unselectable list after the modifier
                     for modified_song_name in self.modifiers[Modifiers[result]]:
-                        print(f"\n{' ' * (max_digits + 4)}{modified_song_name}", end = "")
+                        print(f"\n{' ' * max(max_digits + 2, 4)}{color('|', Colors.faint)}{modified_song_name}", end = "")
+                elif list_type == ListModes.Sequences and commands_finished and modifiers_finished:
+                    for song_name in self.sequences[result]:
+                        print(f"\n{' ' * max(max_digits + 2, 4)}{color('|', Colors.faint)}{song_name}", end = "")
 
                 print()
                 
@@ -1363,7 +1464,7 @@ Playback modes:
                         "exit" : stop,
                         "exit later" : delayed_exit,
 
-                        "new sequence" : create_sequence
+                        "sequences" : list_sequences
                         }
 
     global exact_commands
@@ -1403,35 +1504,23 @@ except:
 for file_name in file_names:
     if file_name[len(file_name) - 4 : ] != ".wav":
         alert = True
-        print(color(f"The file \"{file_name}\"\'s name doesn't end with \".wav\", but it was added to the playlist anyways", Colors.yellow))
+        print(color(f"The file \"{file_name}\"\'s name doesn't end with \".wav\", but it was added to the playlist anyway", Colors.yellow))
     
     song_name:str = file_name.replace(".wav", "")
-
-    if not song_name.isascii(): # TODO Testing needed
-        for i in range(len(song_name) - 1, -1, -1):
-            if not song_name[i].isascii():
-                song_name = song_name[:i] + song_name[i + 1:]
-
-        alert = True
-        print(color(f"{file_name}'s name was added as {song_name} due to invalid character(s)", Colors.red))
-
-    if (song_name in valid_commands.keys()) or song_name == "clear" or song_name == "*" or song_name == "": # Filter out any songs with the same name as a command
-        alert = True
-        print(color(f"{file_name} dropped due to name overlap with existing command!", Colors.red))
-    else:
-        songs[song_name] = Song(song_name, f"{DIRECTORY}{file_name}")
-
-    song_names.append(song_name)
-
-for i in range(len(song_names) - 1, -1, -1):
-    try:
-        if int(song_names[i]) <= len(valid_commands.keys()) + len(song_names): # Will error if the song name can't be casted to an int
+    try: # Will error if the song name can't be casted to an int
+        if int(song_name) <= len(valid_commands.keys()) + len(song_names) + 1: # Additionally, only raise an alert if the index is a valid one
             alert = True
-            print(color(f"{song_names[i]} dropped due to name overlap with existing index!", Colors.red))
-            del songs[song_names[i]]
-            del song_names[i]
+            print(color(f"{song_name} dropped due to name overlap with existing index!", Colors.red))
+            continue # Avoid the "finally" block of code
+        # If the number converted from the song name is not a valid index, the song will be added in the "finally" block
     except:
-        continue
+        if (song_name in valid_commands.keys()) or song_name == "clear" or song_name == "*" or song_name == "": # Filter out any songs with the same name as a command
+            alert = True
+            print(color(f"{file_name} dropped due to name overlap with existing command!", Colors.red))
+        else:
+            songs[song_name] = Song(song_name, f"{DIRECTORY}{file_name}")
+    finally:
+        song_names.append(song_name)    
 
 if alert: # Prevent the "song dropped" messages from being instantly cleared from the console
     print()
@@ -1445,8 +1534,6 @@ def play():
     player_thread.start()
 
     player.interlude_flag = False # Disable the waiting period before the first song
-    player.play_next_song()
-
     while True:
         if player.playing:
             player.play_next_song() # Yields within 1.5 seconds after the player is paused

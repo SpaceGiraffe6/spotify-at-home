@@ -4,7 +4,7 @@ from time import sleep as wait, time
 from wave import open as open_wav
 from typing import Union
 
-from info import Modifiers, Colors, SongAttributes, BASE_SONG_WEIGHT, STANDARD_SONG_LENGTH
+from info import LYRIC_PLACEHOLDER_CHARACTER, Modifiers, Colors, SongAttributes, BASE_SONG_WEIGHT, STANDARD_SONG_LENGTH
 
 # time: a string representing a time in mm:ss.ss format
 # converts and returns the time in seconds w/ decimals
@@ -38,14 +38,14 @@ class Song:
 
         # Each item in lyrics is a dictionary representing a line in the form of {"time" : start time of this line, "text" : the line's text}
         # lyrics will be None if no lyrics text file 
-        self.lyrics:list[dict[str, Union(int, str)]] = None # Each lyric line will not have a newline character at the end
+        self.lyrics:list["dict[str, Union(int, str)]"] = None # Each lyric line will not have a newline character at the end
         try:
             lines:list[str] = open(f"lyrics/{self.song_name}.txt", "r").readlines() # Will error if no lyrics file with the same name as the song is found
 
             for i in range(len(lines)):
                 line:str = lines[i]
 
-                line = line.replace("/u2669", "\u2669") # Add in any quarter note symbols
+                line = line.replace("/u2669", LYRIC_PLACEHOLDER_CHARACTER) # Add in any quarter note symbols
                 if i != len(lines) - 1: # The last line of each lyrics file won't have a new line after it
                     line = line[:len(line) - 1] # Remove the newline character at the end of the line
 

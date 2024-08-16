@@ -3,6 +3,8 @@ from enum import Enum
 TICK_DURATION:float = 0.5 # seconds. Best if TICK_DURATION <= 1
 TIMER_RESOLUTION:float = 0.2 # seconds
 
+LYRIC_PLACEHOLDER_CHARACTER:str = "\u2669" # Used in lyric lines when the song doesn't have any words for that part
+
 # ANSI color code format: \033[38;2;<r>;<g>;<b>m
     # or: \033[38;5;<color code>m
     # table of color codes at https://i.stack.imgur.com/KTSQa.png
