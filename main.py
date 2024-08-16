@@ -55,24 +55,57 @@ def confirmation(message:str = "Are you sure?") -> bool:
     message += " (y/n): "
 
     user_input:str = input(message).strip() # Will become an empty string if the user only entered spaces
+    confirmed:bool = False
     if user_input == "" or user_input.lower().startswith("y"): # Returns True if user inputs nothing
-        print()
-        return True
+        confirmed = True
     else:
         print("\nAction cancelled!")
         block_until_input()
-        print()
-        return False
+    print()
+    return confirmed
 
+# Helper class for search_lists
+class SearchResultTypes(Enum):
+    Exact = f"*Results are exact matches*"
+    Fuzzy = f"*Results are {color('not', Colors.underline)} exact matches*" # Only the message for Fuzzy is used (in list_actions)
 # Returns [search] if search is an empty string
+# Returns an empty list if nothing in each search list matches the search term
+# If include_result_type is True, then search_lists will return a tuple in the form (SearchResultTypes, searched lists)
+    # The SearchResultType value tells you whether the returned results for each list were obtained using exact matching or a fuzzy search
+def search_lists(search:str, lists:"list[tuple[str, list[str]]]", index_search_list:"list[str]" = None, include_result_type:bool = False) -> "list[tuple[str, list[str]]]":
+    if not search: # If search is an empty string
+        return [search]
+
+    # Does nothing if the search term is not a number or if index_search_list is not a list
+    try:
+        index = int(search) - 1
+        if index_search_list == []:
+            for _, sublist in lists:
+                index_search_list += sublist
+        
+        if index < len(index_search_list): # Errors if index_search_list isn't a list
+            return [("", [index_search_list[index]])] # Artificially create a sublist to avoid errors in list_actions()
+    except:
+        pass
+    
+    results_lists:dict[SearchResultTypes, list[tuple[str, list[str]]]] = {result_type : [] for result_type in SearchResultTypes}
+    for list_name, sublist in lists:
+        sublist_results, result_type = search_for_item(search = search, search_list = sublist, index_search_list = None, include_result_type = True)
+        if len(sublist_results) > 0:
+            results_lists[result_type].append((list_name, sublist_results))
+
+    results, result_type = (results_lists[SearchResultTypes.Exact], SearchResultTypes.Exact) if len(results_lists[SearchResultTypes.Exact]) > 0 else (results_lists[SearchResultTypes.Fuzzy], SearchResultTypes.Fuzzy)
+    if include_result_type:
+        return (results, result_type)
+    return results
 # Set index_search_list to something that's not a list to disable index search. If it's not specified, then it will automatically try to index search the search_list
 # Relative order of items in search_list will be kept the same
-def search_for_item(search:str, search_list:"list[str]", index_search_list:"list[str]" = []) -> "list[str]":
+def search_for_item(search:str, search_list:"list[str]", index_search_list:"list[str]" = [], include_result_type:bool = False) -> "list[str]":
     if not search: # If search is an empty string
         return [search]
 
     try:
-        # Errors if the search term is not a number or if index_search_list is None
+        # Errors if the search term is not a number or if index_search_list is not a list
         index = int(search) - 1
         if index_search_list == []:
             index_search_list = search_list
@@ -85,17 +118,21 @@ def search_for_item(search:str, search_list:"list[str]", index_search_list:"list
     search = search.strip().lower()
 
     search_pairs:list[tuple[str, str]] = [(item[:len(search)].lower(), item) for item in search_list if item not in exact_commands] # Tuples in the format of (name of item cut down to not exceed the length of the search term , original name of the item)
-    results:list[str] = [name for short_name, name in search_pairs if short_name == search]
+    result_type:SearchResultTypes = SearchResultTypes.Exact
+    results:list[str] = [name for short_name, name in search_pairs if short_name == search] # Add in the exact matches
     if search in exact_commands:
-        results.insert(0, search) # Put the exact result (if there is one) at the front of the list of results
+        results.insert(0, search) # Put the exact command result (if there is one) at the front of the list of results
     
-    if len(results) > 0:
-        return results
-
     # If the user made a typo in the search and no matches were found
-    shortened_results:list[str] = get_close_matches(search, [short_name for short_name, *_ in search_pairs]) # The higher the cutoff parameter (between 0 and 1), the stricter the search will be
+    if len(results) == 0:
+        shortened_results:list[str] = get_close_matches(search, [short_name for short_name, *_ in search_pairs]) # The higher the cutoff parameter (between 0 and 1), the stricter the search will be
+        results = [name for short_name, name in search_pairs if short_name in shortened_results]
+        result_type = SearchResultTypes.Fuzzy
     
-    return [name for short_name, name in search_pairs if short_name in shortened_results]
+    if include_result_type:
+        return (results, result_type)
+    return results
+
 # Removes repeat values from target in-place and returns a new, edited list
 def remove_duplicates(target:list) -> list:
     s:set = set(target)
@@ -131,6 +168,12 @@ def fix_grammar(items:"list[any]", str_color:Colors = Colors.reset) -> str:
 
         return (sentence + f"and {color(items[-1], str_color)}")
 
+# Only used to create and format the list of results to pass to list_actions
+def initial_results(*sections:"tuple[tuple[str, list[str]]]") -> "list[tuple[str, list[str]]]":
+    return list(sections)
+# Only used to create and format individual sublists when passing a list of results to list_actions
+def section(header:str, items:"list[str]") -> "tuple[str, list[str]]":
+    return (header, items)
 
 class Modes(Enum):
     Repeat = 0
@@ -386,7 +429,7 @@ class spotify:
         while True:
             clear_console()
             print(header_line)
-            result_string:str = self.list_actions(enabled_commands + selection_pool, list_type = ListModes.ListCreation, autoclear_console = False)
+            result_string:str = self.list_actions(initial_results(section("Commands:", enabled_commands), section("Available selection:", selection_pool)), list_type = ListModes.ListCreation, autoclear_console = False)
 
             if result_string:
                 created_list:list[str] = []
@@ -405,7 +448,7 @@ class spotify:
 
     def create_sequence(self) -> None:
         valid_song_names:list[str] = [song_name for song_name in self.song_names if song_name not in self.sequences]
-        lead_song_name:str = self.list_actions(["q", "quit"] + valid_song_names, ListModes.Songs)
+        lead_song_name:str = self.list_actions(initial_results(section("Commands:", ["q", "quit"]), section("Songs:", valid_song_names)), ListModes.Songs)
         if lead_song_name:
             if lead_song_name in valid_song_names:
                 valid_song_names.remove(lead_song_name)
@@ -429,13 +472,13 @@ class spotify:
         # Do nothing if list_actions returns None
 
     def list_sequences(self, *_) -> None:
-        result:str = self.list_actions(["q", "quit", "new"] + list(self.sequences.keys()), list_type = ListModes.Sequences)
+        result:str = self.list_actions(initial_results(section("Commands:", ["q", "quit", "new"]), section("Sequences", list(self.sequences.keys()))), list_type = ListModes.Sequences)
         if result in self.sequences.keys(): # If result isn't None
             self.list_sequence(result)
 
     def list_sequence(self, song_name:str, *_) -> None:
         sequence:list[str] = self.sequences[song_name]
-        result:str = self.list_actions(["q", "quit", "clear"] + sequence, list_type = ListModes.Sequence, listing_item_name = song_name)
+        result:str = self.list_actions(initial_results(section("Commands:", ["q", "quit", "clear"]), section("Sequence:", sequence)), list_type = ListModes.Sequence, listing_item_name = song_name)
         if result == None:
             return
 
@@ -545,7 +588,7 @@ class spotify:
     def list_queue(self, *_) -> None:
         if len(self.queue) > 0 or len(self.sequence) > 0:
             list_type:ListModes = ListModes.Queue
-            result:str = self.list_actions(["q", "quit", "clear"] + self.queue_song_names, list_type = list_type) # Clears the console
+            result:str = self.list_actions(initial_results(section("", ["q", "quit", "clear"]), section("", self.queue_song_names)), list_type = list_type) # Don't include headers for each section in case they mess up the formatting of the active sequence
             if result and (result in self.queue_song_names):
                 self.remove_queued_item(song_name = result)
             else:
@@ -576,7 +619,7 @@ class spotify:
         if len(active_modifier_names) > 0:
 
             list_type:ListModes = ListModes.Modifiers
-            result:str = self.list_actions(["q", "quit", "clear"] + active_modifier_names + modified_song_names, list_type = list_type)
+            result:str = self.list_actions(initial_results(section("Commands:", ["q", "quit", "clear"]), section("Modifiers", active_modifier_names), section("Modified songs:", modified_song_names)), list_type = list_type)
             if result:
                 if (result in active_modifier_names):
                     self.remove_modifier(modifier = Modifiers[result])
@@ -989,26 +1032,29 @@ Playback modes:
         self.input_command(input("Enter a command: "))
 
     def list_songs(self, *_) -> None: # Requesting a song while another song is playing will queue the requested song instead
-        result:str = self.list_actions(["q", "quit", "*"] + self.song_names, list_type = ListModes.Songs)
-        if result:
+        result:str = self.list_actions(initial_results(section("Commands:", ["q", "quit", "*"]), section("Songs:", self.song_names)), list_type = ListModes.Songs)
+        if result: # Do nothing if result is None
             if result == "*":
                 self.enqueue()
             elif result in self.song_names:
                 self.list_song(result)
             else:
                 self.handle_invalid_result()
-        # Do nothing if result is None
+
     # Lists the commands and modifier actions for a song
     def list_song(self, song_name:str, *_) -> None:
-        results:list[str] = ["q", "quit", "enqueue", "clear"]
+        results:list[str] = ["q", "quit", "enqueue"]
         if song_name in self.disabled_song_names:
             results.insert(2, "enable")
         else:
             results.insert(2, "disable")
+
+        if len(self.songs[song_name].attributes[SongAttributes.modifiers]) > 0: # If the song has at least 1 modifier applied to it
+            results.append("clear")
         results += [modifier.name for modifier in list(self.modifiers.keys())]
 
-        result:str = self.list_actions(results, list_type = ListModes.Song, listing_item_name = song_name)
-        if result:
+        result:str = self.list_actions(initial_results(section("", results)), list_type = ListModes.Song, listing_item_name = song_name)
+        if result: # Do nothing if result is None
             if result in {modifier.name for modifier in Modifiers}:
                 result:Modifiers = Modifiers[result]
                 if result in self.songs[song_name].attributes[SongAttributes.modifiers]: # If the listing song already has this modifier
@@ -1019,7 +1065,6 @@ Playback modes:
                 self.handle_invalid_result()
 
             self.update_ui()
-        # Do nothing if result is None
     
     def karaoke(self) -> None:
         delay:float = 0.3 # Number of seconds to delay the lyrics by to compensate for lag
@@ -1119,7 +1164,7 @@ Playback modes:
             print()
             # List the queue if it's not empty
             if len(self.queue) > 0 or len(self.sequence) > 0:
-                print("Next up:")
+                print("Up next:")
                 max_index_len:int = len(str(len(self.queue)))
                 for song_name in self.sequence:
                     print(f"{'-  ' : <{max_index_len + 2}}{color(song_name, SongAttributes.sequenced.value)}")
@@ -1152,15 +1197,15 @@ Playback modes:
 
     # Takes in the user's input and tries to find a corresponding command with list_actions()
     # Won't directly print anything
-    def input_command(self, command:str, index_search_enabled:bool = True) -> None:
-        if command == "" or command == "q" or command == "quit":
+    def input_command(self, user_input:str, index_search_enabled:bool = True) -> None:
+        if user_input == "" or user_input == "q" or user_input == "quit":
             valid_commands["quit"](self)
         else:
             index_search_list:"list[str]" = None
             if index_search_enabled:
                 index_search_list = []
 
-            result:str = self.list_actions(search_for_item(command, list(valid_commands.keys()) + self.song_names + ["*"], index_search_list = index_search_list))
+            result:str = self.list_actions(search_lists(search = user_input, lists = initial_results(section("Commands:", list(valid_commands.keys())), section("Songs:", self.song_names), section("", ["*"])), index_search_list = index_search_list, include_result_type = True))
             if result == "*":
                 self.enqueue()
             elif result in self.song_names:
@@ -1202,13 +1247,26 @@ Playback modes:
         return key
       
     # results must be in the order of [commands, modifiers, songs]
-    def list_actions(self, results:"list[str]", list_type:ListModes = None, listing_item_name:str = None, autoclear_console:bool = True) -> None:
+    # results_lists can also be a tuple in the form (list of sublists' tuples, SearchResultTypes)
+    def list_actions(self, results_lists:"list[tuple[str, list[str]]]", list_type:ListModes = None, listing_item_name:str = None, autoclear_console:bool = True) -> None:
         if autoclear_console:
             clear_console()
         special_commands:dict[str, dict[str, function]] = self.listing_info[list_type]["special commands"] # Each key is the name of the command, and the value is a dict where "confirmation" is the function that asks the user to confirm (None if no confirmation needed) that returns True/False, and "action" is the function to run if the user confirms
-        list_separators_enabled:bool = False # Whether to show the separators between commands, modifiers, and songs when listing the results. Will interfere when used while listing the current sequence
 
-        # Handle cases where there are no valid results or only 1 valid result
+        # result_type defaults to SearchResultTypes.Exact
+        results_lists, results_type = results_lists if type(results_lists) == tuple else (results_lists, SearchResultTypes.Exact) # results_lists will automatically unpack if it's a tuple
+
+        results:list = []
+        separators_directory:dict[int, str] = {}
+        curr_index:int = 0
+        for separator, separated_list in results_lists:
+            results += separated_list
+            separators_directory[curr_index] = separator
+            curr_index += len(separated_list)
+        if len(separators_directory) == 1:
+            separators_directory.clear() # No need to use separators between each section if there is only 1 section
+                
+        # Handle cases where there are no valid results (Guaranteed to return)
         if len(results) == 0:
             print(self.listing_info[list_type]["no results"]["message"])
             block_until_input()
@@ -1217,6 +1275,13 @@ Playback modes:
 
         elif len(results) == 1: # Something is guaranteed to be returned here if there is only 1 item in results
             result = results[0]
+            if results_type == SearchResultTypes.Fuzzy:
+                clear_console()
+                print(f"- {color(result, Colors.bold)}", end = "\n\n")
+                if not confirmation(message = "Is this the one you want?"): # Skip past this block of code if the user confirms
+                    self.listing_info[list_type]["no results"]["action"](listing_item_name)
+                    return
+
             if result in valid_commands.keys():
                 valid_commands[result](self)
             elif result in special_commands.keys():
@@ -1249,9 +1314,7 @@ Playback modes:
                 return
             # The selection prompt and color key for when list_type is Queue will be printed after determining the left margin
         else: # Includes when list_type is Songs
-            if list_type == ListModes.Modifiers:
-                list_separators_enabled = True
-            elif list_type == ListModes.Song:
+            if list_type == ListModes.Song:
                 header_line = header_line.format(song_name = color(listing_item_name, Colors.bold))
 
             print(header_line)
@@ -1288,24 +1351,27 @@ Playback modes:
             seq_song:Song = self.songs[self.sequence[count - 1]]
             return (separator + color(f"{str(count) + '. ' : <{max_sequence_digits + 2}}", Colors.faint) + color(seq_song.song_name, Colors.yellow) + f" {color('-' * (self._max_song_name_length - len(seq_song.song_name) + 1), Colors.faint)} {color(to_minutes_str(seq_song.duration), Colors.cyan)}")
 
+        if results_type == SearchResultTypes.Fuzzy:
+            print(SearchResultTypes.Fuzzy.value)
+
+        # Print all the results
         commands_finished:bool = False # Whether all the commands in results have been listed
         modifiers_finished:bool = False
         commands_count:int = 0 # Used for determining the index of the removing song in self.queue_song_names when list_mode is Queue and the user input is a valid index
-        for result in results:
+        for index in range(len(results)):
+            separator:str = separators_directory.get(index, "")
+            if separator: # False if separator was set to an empty string
+                print(color(separator, Colors.faint))
+
+            result = results[index]
             line:str = ""
             if commands_finished == False and (result in valid_commands.keys() or result in special_commands.keys()): # The command results will always be first in the list
-                if list_separators_enabled and commands_count == 0:
-                    print(f"{color('Commands:', Colors.faint)}")
-
                 line = f"{str(count) + '.' : <{max_digits + 1}} {color(result)}"
                 commands_count += 1
             
             elif modifiers_finished == False:
                 try:
                     modifier:Modifiers = Modifiers[result] # Will error if the result isn't the name of a modifier
-                    if list_separators_enabled and not commands_finished:
-                        print(f"{color('Modifiers:', Colors.faint)}")
-
                     if list_type == ListModes.Modifiers:
                         line = f"{str(count) + '.' : <{max_digits + 1}} {color(result, modifier.value['color'])}{color('  - ' + modifier.value['description'], Colors.faint)}"
                     elif list_type == ListModes.Song:
@@ -1322,8 +1388,6 @@ Playback modes:
                     commands_count += 1
                 except:
                     modifiers_finished = True # Move on to listing songs without incrementing the commands count
-                    if list_separators_enabled and count < len(results): # If there are songs in results
-                        print(f"{color('Songs:', Colors.faint)}")
                 
                 commands_finished = True
 
@@ -1420,7 +1484,8 @@ Playback modes:
 
                 return
 
-        return self.list_actions(search_for_item(user_input, results), list_type = list_type, listing_item_name = listing_item_name)
+        # Search recursively until the user quits or narrows the search down to 1 or 0 possible result(s)
+        return self.list_actions(search_lists(search = user_input, lists = results_lists, index_search_list = results, include_result_type = True), list_type = list_type, listing_item_name = listing_item_name)
     def handle_invalid_result(self):
         clear_console()
         print(f"{color('Invalid result!', Colors.red)}\nPlease check your spelling and/or capitalization")
