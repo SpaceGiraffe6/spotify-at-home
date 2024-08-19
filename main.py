@@ -425,26 +425,13 @@ class spotify:
         if not header_line:
             header_line = self.listing_info[ListModes.ListCreation]["header line"]
 
-        enabled_commands:list[str] = ["q", "quit"]
         while True:
             clear_console()
             print(header_line)
-            result_string:str = self.list_actions(initial_results(section("Commands:", enabled_commands), section("Available selection:", selection_pool)), list_type = ListModes.ListCreation, autoclear_console = False)
+            result_string:str = self.list_actions(initial_results(section("Commands:", ["q", "quit"]), section("Available selection:", selection_pool)), list_type = ListModes.ListCreation, autoclear_console = False)
 
             if result_string:
-                created_list:list[str] = []
-                try: # Errors if one of the results can't be casted to an int
-                    results:list[int] = [int(result) - len(enabled_commands) - 1 for result in result_string.replace(" ", "").split(",")]
-                    for index in results:
-                        if index >= 0 and index < len(selection_pool):
-                            created_list.append(selection_pool[index])
-                        else:
-                            raise NotImplementedError
-
-                    return created_list # The function calling this create_list will handle cases where length of created_list is 0
-                finally:    
-                    print("\nInvalid list item!")                      
-                    block_until_input()
+                pass
 
     def create_sequence(self) -> None:
         valid_song_names:list[str] = [song_name for song_name in self.song_names if song_name not in self.sequences]
@@ -724,11 +711,13 @@ class spotify:
             block_until_input()
             self.update_ui()
     def remove_modifier(self, song_name:str = None, modifier:Modifiers = None, silent:bool = False):
+        song:Song = self.songs[song_name] if song_name else None
+
         removals:int = 0
         message:str = ""
         if not modifier:
-            if song_name:
-                active_modifiers:set[Modifiers] = self.songs[song_name].attributes[SongAttributes.modifiers]
+            if song:
+                active_modifiers:set[Modifiers] = song.attributes[SongAttributes.modifiers]
             
                 # Format and print the "modifier(s) cleared" message
                 if len(active_modifiers) == 0:
@@ -752,9 +741,8 @@ class spotify:
 
                     message = f"Removed the {separator.join(modifier_names)} {noun} from {color(song_name, Colors.bold)}"
 
-                active_modifiers.clear() # active_modifiers has the same reference to the list of modifiers in the song
-
-            else: # If no song name or modifier is specified
+                song.clear_modifiers()
+            else: # If no song name or modifier is specified, clear all modifiers
                 for modifier_list in self.modifiers.values():
                     removals += len(modifier_list)
                     for song_name in modifier_list:
@@ -765,13 +753,13 @@ class spotify:
 
                 message = f"Cleared {color(removals, Colors.bold)} modifier(s) from all songs"
         else: # If a modifier is specified
-            if song_name:
+            if song:
                 if modifier == Modifiers.synced:
                     self.desync_songs(song_name) # Will print a message with the songs that were desynced
                 else:
                     try:
                         self.modifiers[modifier].remove(song_name)
-                        self.songs[song_name].remove_modifiers(self.get_synced_count(song_name), modifier)
+                        song.remove_modifiers(self.get_synced_count(song_name), modifier)
                         message = f"Removed the {color(modifier.name, modifier.value['color'])} modifier from {color(song_name, Colors.bold)}"
                     except:
                         message = f"{color(song_name, Colors.bold)} doesn't have the {color(modifier.name, modifier.value['color'])} modifier..."

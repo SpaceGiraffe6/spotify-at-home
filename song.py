@@ -32,7 +32,7 @@ class Song:
                                                         SongAttributes.queued : False,
                                                         SongAttributes.sequenced : False,
                                                         SongAttributes.modifiers : set()}
-        self.prev_attributes:dict[str, Union(bool, set)] = None
+        self.attributes_changed:bool = True
         self.prev_listing_colors:list[Colors] = None
         self.sequence:list[str] = []
 
@@ -65,8 +65,8 @@ class Song:
         return self.song_name
 
     def get_prev_listing_colors(self) -> "list[Colors]":
-        if self.attributes != self.prev_attributes: # Return the colors that were last used for this song if none of the song's attributes have been changed since then
-            self.prev_attributes = self.attributes.copy()
+        if self.attributes_changed: # Return the colors that were last used for this song if none of the song's attributes have been changed since then
+            self.attributes_changed = False
             return None
         else:
             return self.prev_listing_colors
@@ -76,11 +76,13 @@ class Song:
 
     def play(self):
         self.attributes[SongAttributes.playing] = True
+        self.attributes_changed = True
 
         PlaySound(self.file_name, SND_ASYNC)
         self.start_timer() # Blocks the song-playing thread until the song is finished or interrupted
 
         self.attributes[SongAttributes.playing] = False
+        self.attributes_changed = True
 
     # Don't call this function from the main thread
     def start_timer(self) -> None:
@@ -100,11 +102,15 @@ class Song:
     def disable(self) -> None:
         self.attributes[SongAttributes.disabled] = True
         self.recalculate_weight(synced_songs_count = None) # synced_songs_count won't be used if the song is disabled
+        self.attributes_changed = True
     def enable(self) -> None:
         self.attributes[SongAttributes.disabled] = False
         self.recalculate_weight(synced_songs_count = self.player.get_synced_count(self.song_name))
+        self.attributes_changed = True
 
     def update_sequence(self, sequence:"list[str]"):
+        prev_sequence_attribute:bool = self.attributes[SongAttributes.sequenced]
+
         if sequence:
             self.attributes[SongAttributes.sequenced] = True
             self.sequence = sequence
@@ -112,8 +118,12 @@ class Song:
             self.attributes[SongAttributes.sequenced] = False
             self.sequence = []
 
+        if prev_sequence_attribute != self.attributes[SongAttributes.sequenced]:
+            self.attributes_changed = True
+
     # Pass in nothing to modifiers to only update the weight based on synced_songs_count
     # Adding a modifier that has already been added won't do anything
+    # synced_songs_count is always at least 1 because each song is technically always synced with itself
     def add_modifiers(self, synced_songs_count:int = 1, *modifiers:"tuple[Modifiers]") -> None:
         self.attributes[SongAttributes.modifiers] = self.attributes[SongAttributes.modifiers] | set(modifiers)
         self.recalculate_weight(synced_songs_count)
@@ -124,7 +134,7 @@ class Song:
 
     def clear_modifiers(self) -> None:
         self.attributes[SongAttributes.modifiers].clear()
-        self.weight = self.BASE_WEIGHT
+        self.recalculate_weight(synced_songs_count = 1)
 
     # Only called from within this object
     def recalculate_weight(self, synced_songs_count:int) -> None:
@@ -134,3 +144,5 @@ class Song:
             self.weight = self.BASE_WEIGHT
             for modifier in self.attributes[SongAttributes.modifiers]:
                 self.weight = modifier.value["weight update"](self.weight, synced_songs_count)
+        
+        self.attributes_changed = True
