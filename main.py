@@ -64,6 +64,14 @@ def confirmation(message:str = "Are you sure?") -> bool:
     print()
     return confirmed
 
+class list_item:
+    def __init__(self, id:int = None, name:str = None):
+        self.id:int = id
+        self.name:str = name
+    
+    def __str__(self) -> str:
+        return self.name
+
 # Helper class for search_lists
 class SearchResultTypes(Enum):
     Exact = f"*Results are exact matches*"
@@ -104,6 +112,7 @@ def search_for_item(search:str, search_list:"list[str]", index_search_list:"list
     if not search: # If search is an empty string
         return [search]
 
+    # See if search is a valid index in index_search_list
     try:
         # Errors if the search term is not a number or if index_search_list is not a list
         index = int(search) - 1
@@ -115,13 +124,13 @@ def search_for_item(search:str, search_list:"list[str]", index_search_list:"list
     except:
         pass
 
+    # If search isn't a valid index
     search = search.strip().lower()
 
     search_pairs:list[tuple[str, str]] = [(item[:len(search)].lower(), item) for item in search_list if item not in exact_commands] # Tuples in the format of (name of item cut down to not exceed the length of the search term , original name of the item)
     result_type:SearchResultTypes = SearchResultTypes.Exact
-    results:list[str] = [name for short_name, name in search_pairs if short_name == search] # Add in the exact matches
-    if search in exact_commands:
-        results.insert(0, search) # Put the exact command result (if there is one) at the front of the list of results
+    # If search matches an exact command that is also included in search_list, add that command into results first
+    results:list[str] = ([search] if (search in exact_commands) and (search in search_list) else []) + [name for short_name, name in search_pairs if short_name == search] # Add in the exact matches
     
     # If the user made a typo in the search and no matches were found
     if len(results) == 0:
@@ -129,6 +138,7 @@ def search_for_item(search:str, search_list:"list[str]", index_search_list:"list
         results = [name for short_name, name in search_pairs if short_name in shortened_results]
         result_type = SearchResultTypes.Fuzzy
     
+    # Return the result (with the result type, if requested)
     if include_result_type:
         return (results, result_type)
     return results
@@ -253,7 +263,7 @@ class spotify:
                 self.modifiers[modifier].extend(save_file["modifiers"][modifier.name])
 
             # Add this modifier to the songs that are initialized with the modifier
-            # Temporarily set the synced count of all songs to 1
+            # Temporarily set the synced list_count of all songs to 1
             for song in [self.songs[song_name] for song_name in self.modifiers[modifier]]:
                 song.attributes[SongAttributes.modifiers].add(modifier)
         for song in self.songs.values():
@@ -265,7 +275,7 @@ class spotify:
             self.synced_songs.setdefault(pure_song_name, [])
             self.synced_songs[pure_song_name].append(song_name)
 
-        # Update the synced count of all synced songs
+        # Update the synced list_count of all synced songs
         for synced_list in self.synced_songs.values():
             for song_name in synced_list:
                 self.songs[song_name].add_modifiers(synced_songs_count = len(synced_list))
@@ -823,7 +833,6 @@ class spotify:
         if not self.curr_song: # If no other songs have been played
             self.curr_song_index = randint(0, len(self.song_names) - 1)
             self.curr_song = self.songs[self.song_names[self.curr_song_index]]
-            self.save()
     def loop(self) -> None:
         if self.bookmark_index != None:
             self.curr_song_index = self.bookmark_index
@@ -846,7 +855,6 @@ class spotify:
         if song_name in self.sequences:
             self.bookmark_index = self.curr_song_index
 
-        self.save()
     def shuffle(self) -> None:
         available_songs:list[Song] = list(set(self.songs.values()) - {song for cooldown_group in self.songs_on_cooldown for song in cooldown_group} - {self.songs[song_name] for song_name in self.disabled_song_names}) # Relative order of songs will be scrambled
         # No need to recalculate the weight of synced songs here since it was already calculated when the song was synced
@@ -872,7 +880,6 @@ class spotify:
                 self.curr_song_index = randint(0, len(self.song_names) - 1)
                 self.curr_song = self.songs[self.song_names[self.curr_song_index]]
 
-        self.save()
     # Helper function
     # Automatically makes curr_song_index wrap around when it equals/exceeds the length of song_names
     def increment_song_index(self, increment:int = 1) -> str: # Returns the name of the song at the new index
@@ -952,8 +959,7 @@ class spotify:
         # Delay on updating the save file if delayed exit is not toggled because there is a gap between when curr_song is set to the queued item and when the item is removed from the queue
         if self.exit_later:
             self.save()
-            self.stop()
-            return
+            return self.stop() # Returns nothing
 
         # TODO If the user exits the program during the cooldown between songs without using delayed exit when a queued song is about to play, the new song would have been set as curr_song but wouldn't've been removed from the queue yet
         # Updates the songs on cooldown
@@ -976,6 +982,7 @@ class spotify:
                         return # Jump back to the loop in play()
                     self.remaining_interlude_indicator = "-" * seconds_remaining
 
+        self.save()
         self.curr_song.play() # Plays the song in the same thread as this method
 
     def display_help(self) -> None:
@@ -1098,7 +1105,7 @@ Playback modes:
                             else:
                                 print(empty_line)
 
-                        notes_count:int = curr_line.count(LYRIC_PLACEHOLDER_CHARACTER)
+                        notes_count:int = curr_line.list_count(LYRIC_PLACEHOLDER_CHARACTER)
                         segment_time:float = (lyrics[i + 1]["time"] - lyrics[i]["time"]) / (notes_count + 1) # The time between this lyric and the next one is divided into equal segments, with one note lighting up in between each segment
                         notes_shown:int = 0
                         if notes_count:
@@ -1233,7 +1240,7 @@ Playback modes:
             key = "Key: " + key
 
         return key
-      
+    
     # results must be in the order of [commands, modifiers, songs]
     # results_lists can also be a tuple in the form (list of sublists' tuples, SearchResultTypes)
     def list_actions(self, results_lists:"list[tuple[str, list[str]]]", list_type:ListModes = None, listing_item_name:str = None, autoclear_console:bool = True) -> None:
@@ -1249,7 +1256,7 @@ Playback modes:
         curr_index:int = 0
         for separator, separated_list in results_lists:
             results += separated_list
-            separators_directory[curr_index] = separator
+            separators_directory[curr_index] = separator if separator else "----------"
             curr_index += len(separated_list)
         if len(separators_directory) == 1:
             separators_directory.clear() # No need to use separators between each section if there is only 1 section
@@ -1316,10 +1323,10 @@ Playback modes:
         max_sequence_digits:int = len(str(len(self.sequence)))
         overflow_chars = "---" # Used when more than 1 color applies to the same song. Also used to adjust the left margin
         padding:str = " " * 3
-        separator:str = color(f"{padding}|{padding}", Colors.faint)
+        sequence_separator:str = color(f"{padding}|{padding}", Colors.faint)
         left_margin:int = max(len(header_line), (max_digits + 2) + 1 + self._max_song_name_length + len(overflow_chars) * 2 + 1 + 5) # 5 extra spaces for the duration display of each song
         if list_type == ListModes.Queue: # Formats and prints the header lines and the color key
-            print(f"{header_line : <{left_margin}}{separator}", end = "")
+            print(f"{header_line : <{left_margin}}{sequence_separator}", end = "")
             if len(self.sequence) > 0:
                 print(f"Active sequence (not selectable)")
             else:
@@ -1330,58 +1337,62 @@ Playback modes:
                 print(f"{color_key : <{left_margin + (len(color_key) - len(remove_tags(color_key)))}}", end = "")
                 
                 if len(self.sequence) > 0:
-                    print(separator)
+                    print(sequence_separator)
                 else:
                     print()
 
-        count:int = 1
-        def get_sequence_line():
-            seq_song:Song = self.songs[self.sequence[count - 1]]
-            return (separator + color(f"{str(count) + '. ' : <{max_sequence_digits + 2}}", Colors.faint) + color(seq_song.song_name, Colors.yellow) + f" {color('-' * (self._max_song_name_length - len(seq_song.song_name) + 1), Colors.faint)} {color(to_minutes_str(seq_song.duration), Colors.cyan)}")
+        sequence_count:int = 1
+        def get_sequence_line(sequence_count:int) -> str:
+            if sequence_count <= len(self.sequence):
+                seq_song:Song = self.songs[self.sequence[sequence_count - 1]]
+                return (sequence_separator + color(f"{str(sequence_count) + '. ' : <{max_sequence_digits + 2}}", Colors.faint) + color(seq_song.song_name, Colors.yellow) + f" {color('-' * (self._max_song_name_length - len(seq_song.song_name) + 1), Colors.faint)} {color(to_minutes_str(seq_song.duration), Colors.cyan)}")
+            else:
+                return ""
 
         if results_type == SearchResultTypes.Fuzzy:
             print(SearchResultTypes.Fuzzy.value)
 
         # Print all the results
+        list_count:int = 1 # The number of the current item being listed
         commands_finished:bool = False # Whether all the commands in results have been listed
         modifiers_finished:bool = False
         commands_count:int = 0 # Used for determining the index of the removing song in self.queue_song_names when list_mode is Queue and the user input is a valid index
         for index in range(len(results)):
-            separator:str = separators_directory.get(index, "")
-            if separator: # False if separator was set to an empty string
-                print(color(separator, Colors.faint))
+            # Print the separator (if there is one at this index)
+            if index in separators_directory:
+                separator:str = separators_directory[index] # The uncolored separator string
+                print(f"{color(separator, Colors.faint) + (' ' * (left_margin - len(separator)))}", end = "")
+                if list_type == ListModes.Queue:
+                    print(get_sequence_line(sequence_count), end = "")
+                    sequence_count += 1
+                print()
 
             result = results[index]
             line:str = ""
             if commands_finished == False and (result in valid_commands.keys() or result in special_commands.keys()): # The command results will always be first in the list
-                line = f"{str(count) + '.' : <{max_digits + 1}} {color(result)}"
+                line = f"{str(list_count) + '.' : <{max_digits + 1}} {color(result)}"
                 commands_count += 1
             
             elif modifiers_finished == False:
                 try:
                     modifier:Modifiers = Modifiers[result] # Will error if the result isn't the name of a modifier
                     if list_type == ListModes.Modifiers:
-                        line = f"{str(count) + '.' : <{max_digits + 1}} {color(result, modifier.value['color'])}{color('  - ' + modifier.value['description'], Colors.faint)}"
+                        line = f"{str(list_count) + '.' : <{max_digits + 1}} {color(result, modifier.value['color'])}{color('  - ' + modifier.value['description'], Colors.faint)}"
                     elif list_type == ListModes.Song:
-                        action_type:str = ""
-                        if len({modifier} & self.songs[listing_item_name].attributes[SongAttributes.modifiers]) == 1:
-                            action_type = "(remove)"
-                        else:
-                            action_type = "(add)"
-
-                        line = f"{str(count) + '.' : <{max_digits + 1}} {color(result, Modifiers[result].value['color'])} {color(action_type, Colors.faint)}"
+                        action_type:str = "(remove)" if len({modifier} & self.songs[listing_item_name].attributes[SongAttributes.modifiers]) == 1 else "(add)"
+                        line = f"{str(list_count) + '.' : <{max_digits + 1}} {color(result, Modifiers[result].value['color'])} {color(action_type, Colors.faint)}"
                     else:
                         raise NotImplementedError # Manually create an error
 
                     commands_count += 1
                 except:
-                    modifiers_finished = True # Move on to listing songs without incrementing the commands count
+                    modifiers_finished = True # Move on to listing songs without incrementing the commands list_count
                 
                 commands_finished = True
 
             if commands_finished and modifiers_finished: # If this result isn't a command or modifier, then assume all subsequent results are songs
                 if result == "*": # Can only show up in results if list_actions was used (when listing the queue or when there's no listing mode)
-                    line = f"{str(count) + '.' : <{max_digits + 1}} {result}"
+                    line = f"{str(list_count) + '.' : <{max_digits + 1}} {result}"
 
                 else:
                     result_song:Song = self.songs[result]
@@ -1413,13 +1424,14 @@ Playback modes:
                         overflow_dashes += color(overflow_chars, curr_color)
 
                     # I can't explain how this line works even if I tried
-                    line = f"{str(count) + '.' : <{max_digits + 1}} {name} {overflow_dashes}{color('-' * (self._max_song_name_length - len(result) - len(applied_colors)*len(overflow_chars) + (len(Modifiers) + len(self.listing_colors) - 1)*len(overflow_chars)), Colors.faint)} {color(to_minutes_str(self.songs[result].duration), Colors.cyan)}"
+                    line = f"{str(list_count) + '.' : <{max_digits + 1}} {name} {overflow_dashes}{color('-' * (self._max_song_name_length - len(result) - len(applied_colors)*len(overflow_chars) + (len(Modifiers) + len(self.listing_colors) - 1)*len(overflow_chars)), Colors.faint)} {color(to_minutes_str(self.songs[result].duration), Colors.cyan)}"
                 
             if line: # Don't do anything if line is an empty string
                 print(f"{line : <{left_margin + (len(line) - len(remove_tags(line)))}}", end = "")
-                if list_type == ListModes.Queue and count <= len(self.sequence):
+                if list_type == ListModes.Queue:
                     # "Attach" the line in the sequence's list onto a line in the list of commands
-                    print(get_sequence_line(), end = "")
+                    print(get_sequence_line(sequence_count), end = "")
+                    sequence_count += 1
                 elif list_type == ListModes.Modifiers and commands_finished == True and modifiers_finished == False: # If the listing mode is Modifiers and this result is a modifier, list the songs with each modifier in an indented, unnumbered, unselectable list after the modifier
                     for modified_song_name in self.modifiers[Modifiers[result]]:
                         print(f"\n{' ' * max(max_digits + 2, 4)}{color('|', Colors.faint)}{modified_song_name}", end = "")
@@ -1429,13 +1441,14 @@ Playback modes:
 
                 print()
                 
-                count += 1
+                list_count += 1
         
         # Print any more songs in the sequence that didn't get attached to the end of a "queued song" line
         if list_type == ListModes.Queue:
-            while count <= len(self.sequence):
-                print(f"{'' : <{left_margin}}{get_sequence_line()}")
-                count += 1
+            sequence_line:str = get_sequence_line(sequence_count)
+            while sequence_line:
+                print(f"{' ' * left_margin}{sequence_line}")
+                sequence_count += 1
 
         print()
 
