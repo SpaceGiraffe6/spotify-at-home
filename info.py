@@ -35,7 +35,7 @@ class Colors(Enum):
     light_purple = "\033[1;35m"
 
 STANDARD_SONG_LENGTH:int = 180 # Used to scale the weight of each song by its length
-BASE_SONG_WEIGHT:int = 120 # because its divisible by almost everything
+BASE_SONG_WEIGHT:int = 120 # because 120 is divisible by almost everything
 RATE_CHANGE:int = 3 # Percent increase/decrease of the chances for a hot/cold song to be chosen, in decimal form
 class Modifiers(Enum):
     hot = {"color" : Colors.pink, "description" : "While in shuffle mode, increase the chance of a song being played and disables its cooldown", "weight update" : lambda curr_weight, *_ : round(curr_weight*RATE_CHANGE)}

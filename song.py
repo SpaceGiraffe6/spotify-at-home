@@ -57,9 +57,8 @@ class Song:
             self.lyrics = None # In case something is wrong with the lyrics' formatting and only some of the lyrics were added
             pass
         
-        self.BASE_WEIGHT:int = BASE_SONG_WEIGHT + max(-BASE_SONG_WEIGHT//5, min(BASE_SONG_WEIGHT//5, (STANDARD_SONG_LENGTH - self.duration)//8)) # Slightly increase the weights of shorter songs and vice versa
+        self.BASE_WEIGHT:int = BASE_SONG_WEIGHT + max(-BASE_SONG_WEIGHT//4, min(BASE_SONG_WEIGHT//4, (STANDARD_SONG_LENGTH - self.duration)//5)) # Slightly increase/decrease the weight of shorter/longer songs up to ±25% of the base song weight
         self.weight:int = self.BASE_WEIGHT
-        self.cooldown:int = 3
 
     def __str__(self) -> str:
         return self.song_name
@@ -116,7 +115,7 @@ class Song:
             self.sequence = sequence
         else:
             self.attributes[SongAttributes.sequenced] = False
-            self.sequence = []
+            self.sequence.clear()
 
         if prev_sequence_attribute != self.attributes[SongAttributes.sequenced]:
             self.attributes_changed = True
@@ -141,6 +140,8 @@ class Song:
         if self.attributes[SongAttributes.disabled]:
             self.weight = 0
         else:
+            synced_songs_count = max(synced_songs_count, 1)
+
             self.weight = self.BASE_WEIGHT
             for modifier in self.attributes[SongAttributes.modifiers]:
                 self.weight = modifier.value["weight update"](self.weight, synced_songs_count)
