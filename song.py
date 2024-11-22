@@ -5,7 +5,7 @@ from wave import open as open_wav
 from typing import Union
 
 from info import LYRIC_PLACEHOLDER_CHARACTER, Modifiers, Colors, SongAttributes, BASE_SONG_WEIGHT, STANDARD_SONG_LENGTH
-
+from info import ATTRIBUTES_COLORING_ORDER, MODIFIERS_COLORING_ORDER
 # time: a string representing a time in mm:ss.ss format
 # converts and returns the time in seconds w/ decimals
 def to_seconds(time:str) -> float:
@@ -27,13 +27,13 @@ class Song:
         self.start_time = None
 
         # KEYS IN attributes MUST MATCH KEYS IN enabled_colors IN spotify.list_actions
-        self.attributes:dict[str, Union(bool, set)] = {SongAttributes.playing : False, # This attribute is updated from the play function, not from Spotify
+        self.attributes:dict[SongAttributes, Union(bool, set)] = {SongAttributes.playing : False, # This attribute is updated from the play function, not from Spotify
                                                         SongAttributes.disabled : False,
                                                         SongAttributes.queued : False,
                                                         SongAttributes.sequenced : False,
                                                         SongAttributes.modifiers : set()}
         self.attributes_changed:bool = True
-        self.prev_listing_colors:list[Colors] = None
+        self.listing_colors:list[tuple[SongAttributes, list[Colors]]] = []
         self.sequence:list[str] = []
 
         # Each item in lyrics is a dictionary representing a line in the form of {"time" : start time of this line, "text" : the line's text}
@@ -63,12 +63,23 @@ class Song:
     def __str__(self) -> str:
         return self.song_name
 
-    def get_prev_listing_colors(self) -> "list[Colors]":
+    def get_listing_colors(self) -> "list[Colors]":
         if self.attributes_changed: # Return the colors that were last used for this song if none of the song's attributes have been changed since then
+            self.listing_colors.clear()
+
+            for attribute in ATTRIBUTES_COLORING_ORDER:
+                if self.attributes[attribute] and attribute.value: # attribute.value == None  when attribute is Modifiers
+                    self.listing_colors.append((attribute, [attribute.value]))
+            
+            modifier_colors:list[Colors] = []
+            for modifier in MODIFIERS_COLORING_ORDER:
+                if modifier in self.attributes[SongAttributes.modifiers]:
+                    modifier_colors.append(modifier.value["color"])
+            self.listing_colors.append((SongAttributes.modifiers, modifier_colors))
+
             self.attributes_changed = False
-            return None
-        else:
-            return self.prev_listing_colors
+
+        return self.listing_colors
 
     def set_player(self, parent_player): # Call before playing the song
         self.player = parent_player
@@ -97,6 +108,15 @@ class Song:
             else:
                 self.curr_duration -= 1
                 break
+
+    def set_enqueued(self) -> None:
+        if self.attributes[SongAttributes.queued] == False:
+            self.attributes[SongAttributes.queued] = True
+            self.attributes_changed = True
+    def set_dequeued(self) -> None:
+        if self.attributes[SongAttributes.queued] == True:
+            self.attributes[SongAttributes.queued] = False
+            self.attributes_changed = True
 
     def disable(self) -> None:
         self.attributes[SongAttributes.disabled] = True

@@ -8,11 +8,12 @@ songs/*.wav
 lyrics/**
 !read_this.txt
 
-# Ignore the save file
+# Ignore the save file (doesn't work)
 save_file.json
 
 # Ignore the testing file
 testing.py
 
-# IDK what this file is but I'm too scared to delete it
+# IDK what these files are but I'm too scared to delete them
 __pycache__/*
+desktop.ini
