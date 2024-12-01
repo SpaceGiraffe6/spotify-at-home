@@ -6,6 +6,7 @@ from typing import Union
 
 from info import LYRIC_PLACEHOLDER_CHARACTER, Modifiers, Colors, SongAttributes, BASE_SONG_WEIGHT, STANDARD_SONG_LENGTH
 from info import ATTRIBUTES_COLORING_ORDER, MODIFIERS_COLORING_ORDER
+from info import TIMER_RESOLUTION
 # time: a string representing a time in mm:ss.ss format
 # converts and returns the time in seconds w/ decimals
 def to_seconds(time:str) -> float:
@@ -13,6 +14,8 @@ def to_seconds(time:str) -> float:
     return (int(time[0]) * 60) + float(time[1])
 
 class Song:
+    parent_player = None
+
     # File name includes the path to the file
     def __init__(self, song_name:str, file_name:str):
         self.file_name:str = file_name
@@ -81,10 +84,12 @@ class Song:
 
         return self.listing_colors
 
-    def set_player(self, parent_player): # Call before playing the song
-        self.player = parent_player
-
     def play(self):
+        if not Song.parent_player:
+            print("No parent player found!")
+            wait(5)
+            return
+            
         self.attributes[SongAttributes.playing] = True
         self.attributes_changed = True
 
@@ -99,13 +104,13 @@ class Song:
         self.curr_duration = 0
         self.start_time = time()
 
-        while self.curr_duration < self.duration: # Loops roughly every second
-            if self.player.playing == True:
+        while self.curr_duration < self.duration: # Outer loop iterates roughly once per second
+            if Song.parent_player.playing == True:
                 while time() - self.start_time <= self.curr_duration: # curr_duration will be ahead of the actual duration by between 0-1 seconds
-                    wait(0.2)
+                    wait(TIMER_RESOLUTION)
                 self.curr_duration += 1
 
-            else:
+            else: # If the player has been paused
                 self.curr_duration -= 1
                 break
 
@@ -124,7 +129,7 @@ class Song:
         self.attributes_changed = True
     def enable(self) -> None:
         self.attributes[SongAttributes.disabled] = False
-        self.recalculate_weight(synced_songs_count = self.player.get_synced_count(self.song_name))
+        self.recalculate_weight(synced_songs_count = Song.parent_player.get_synced_count(self.song_name))
         self.attributes_changed = True
 
     def update_sequence(self, sequence:"list[str]"):

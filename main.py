@@ -78,6 +78,8 @@ class Item:
     
     def __str__(self) -> str:
         return self.name
+    def __repr__(self) -> str:
+        return str(self)
 
 # Helper class for search_lists
 class SearchResultType(Enum):
@@ -120,23 +122,41 @@ def search_for_item(search:str, search_list:"list[Item]", include_result_type:bo
     if not search: # If search is an empty string
         return [search]
 
-    # If search is a valid index, it search_lists would've returned something before calling search_for_item
-
-    search_pairs:list[tuple[str, Item]] = [(item.name[:len(search)].lower(), item) for item in search_list] # Tuples in the format of (name of item cut down to not exceed the length of the search term , original name of the item)
+    # If search is a valid index, search_lists would've returned something before calling search_for_item
     result_type:SearchResultType = SearchResultType.Exact
-    # If search matches an exact command that is also included in search_list, add that command into results first
     results:list[Item] = [] # Add in the exact matches
-    criteria:function = lambda search_pair : (results.append(search_pair[1]) or (search_pair[1].name.lower() == search)) if search_pair[0] == search else False # Appends the item to results if its short name matches search, returns True if AND ONLY IF the ITEM NAME exactly matches search
-    for search_pair in search_pairs:
-        if criteria(search_pair): # If the item name precisely matches search
-            results = [results[-1]] # Only keep the last appended item that was a precise match; clear the other exact short-name matches
-            # New criteria will only append other precise matches to results and will always return a falsy value
-            criteria = lambda search_pair : results.append(search_pair[1]) if search_pair[1].name.lower() == search else False
+
+    search_pairs:dict[Item, tuple[set[str]]] = {}
+    token_sequence_length:int = search.count(" ") + 1
+    precise_match_found:bool = False
+    for item in search_list:
+        if item.name.lower() == search:
+            if not precise_match_found:
+                results.clear()
+                precise_match_found = True
+            results.append(item)
+
+        elif not precise_match_found:
+            item_tokens:list[str] = item.name.lower().split(" ")
+            token_sequences:set[str] = {" ".join(item_tokens[i : max(i + token_sequence_length, token_sequence_length)])[:len(search)] for i in range(max(1, len(item_tokens) - token_sequence_length + 1))}
+            for sequence in token_sequences:
+                if sequence == search:
+                    results.append(item)
+                    break
+                    
+            search_pairs[item] = token_sequences
 
     # If the user made a typo in the search and no matches were found
     if len(results) == 0:
-        shortened_results:list[str] = get_close_matches(search, [short_name for short_name, _ in search_pairs]) # The higher the cutoff parameter (between 0 and 1), the stricter the search will be
-        results = [item for short_name, item in search_pairs if short_name in shortened_results]
+        all_tokens:set[str] = set()
+        for token_sequence in search_pairs.values():
+            all_tokens |= token_sequence
+
+        filtered_tokens:set[str] = set(get_close_matches(search, all_tokens, n = len(all_tokens))) # The higher the cutoff parameter (between 0 and 1), the stricter the search will be (default is 0.6)
+        for item, token_sequences in search_pairs.items():
+            if not filtered_tokens.isdisjoint(token_sequences):
+                results.append(item)
+                
         result_type = SearchResultType.Fuzzy
     
     # Return the result (with the result type, if requested)
@@ -226,7 +246,7 @@ class Command:
         return hash(self.keyword)
 
 class spotify:
-    # Constants
+    # Constant + static variables
     COOLDOWN_BETWEEN_SONGS:int = 8 # Seconds
     # When the playback mode is shuffle, the minimum number of songs that would have to play between each repeat
     COOLDOWN_BETWEEN_REPEATS:int = 5 # Will be capped at len(playlist) - 1 in the constructor
@@ -241,6 +261,9 @@ class spotify:
         except:
             pass
 
+        # Initialize the songs
+        Song.parent_player = self # Set the parent player of the songs before anything else
+
         self.songs:dict[str, Song] = songs # Keys are the name of the song
         self.song_names:list[Song] = song_names
         self._max_song_name_length:int = 0
@@ -250,8 +273,7 @@ class spotify:
             if name in save_file.get("sequences", {}):
                 song.update_sequence(save_file["sequences"][name])
 
-            song.set_player(self)
-        # For safe measure
+        # For safe measure, in case a command name is longer than the longest song name
         for command in valid_commands.keys():
             if len(command) > self._max_song_name_length + 15:
                 self._max_song_name_length = len(command)
@@ -886,6 +908,9 @@ class spotify:
             PlaySound("1s_silence", SND_ASYNC)
 
         self.remaining_interlude_indicator = ""
+        hide_cursor()
+        print(color("Pausing...", Colors.faint))
+        wait(1 + TIMER_RESOLUTION + 0.25)
         self.update_ui()
     # Resuming the player will restart the song that was playing before the pause
     def resume(self) -> None:
@@ -897,7 +922,9 @@ class spotify:
             
             self.interlude_flag = False # Temporarily disable the cooldown between songs
             self.playing = True # Resume the loop in the song-playing thread
-            wait(TICK_DURATION + 0.5) # Wait for the song-playing thread to prepare the next song
+            hide_cursor()
+            print(color("Song restarting...", Colors.faint))
+            wait(TICK_DURATION + 0.5) # Wait for the song-playing thread to prepare the next song before self.update_ui() displays it
 
         self.update_ui()
     def skip(self) -> None:
@@ -905,14 +932,15 @@ class spotify:
         PlaySound("1s_silence.wav", SND_ASYNC)
 
         print("Picking the next song...")
-        wait(1.25) # Wait for the current song's timer to stop before setting self.playing to True. Song timers update every second independent of TICK_DURATION
+        wait(1 + TIMER_RESOLUTION + 0.25) # Wait for the current song's timer to stop before setting self.playing to True. Song timers update every second independent of TICK_DURATION
 
-        self.interlude_flag = False
+        self.remaining_interlude_indicator = "" # If this function was called during an interlude, clear its indication from the display
+        self.interlude_flag = False # Don't wait before playing the next song
         self.playing = True # Resume the song-playing thread
 
         wait(TICK_DURATION + 0.5) # Wait for the song-playing thread to set the next song (Must be longer than the waiting time in each iteration in the loop in play())
         self.update_ui()
-
+    
     # Repeat the current song an additional time
     # the repeat will not trigger any sequences
     def encore(self) -> None:
@@ -961,9 +989,7 @@ class spotify:
 
         wait(TICK_DURATION)
         if self.playing: # If this song has ended naturally and not because the user paused the player
-            if not self.interlude_flag: # Interlude flag will be set to false when playing the first song so that everything saves BEFORE waiting and then playing each subsequent song
-                self.interlude_flag = True
-            else:
+            if self.interlude_flag: # Interlude flag will be set to false when playing the first song so that everything saves BEFORE waiting and then playing each subsequent song
                 self.remaining_interlude_indicator = "-" * self.COOLDOWN_BETWEEN_SONGS
                 
                 wait(ceil(TICK_DURATION) - TICK_DURATION) # A TICK_DURATION of time has already been waited before self.playing was checked, so a TICK_DURATION has to be taken off the first second of wait time here
@@ -971,8 +997,10 @@ class spotify:
                 for seconds_remaining in range(self.COOLDOWN_BETWEEN_SONGS - 1, -1, -1):
                     wait(1)
                     if not self.playing: # If the player was paused during the interlude
-                        return # Jump back to the loop in play()
+                        return # Jump back to the loop in play() in the main thread
                     self.remaining_interlude_indicator = "-" * seconds_remaining
+            else:
+                self.interlude_flag = True
 
         self.save()
         self.curr_song.play() # Plays the song in the same thread as this method
@@ -1135,8 +1163,8 @@ Playback modes:
                     clear_console()
                     hide_cursor()
                     # Format the prompt and horizontally center it
-                    prompt:str = color('Song finished - ', Colors.faint) + color('[enter]', Colors.blue) + color(' to go back', Colors.faint)
-                    print(f"{' ' * ((display_width - len('Song finished - [enter] to go back')) // 2)}{prompt}", end = "")
+                    prompt:str = color('Song finished - press ', Colors.faint) + color('[enter]', Colors.blue) + color(' to return', Colors.faint)
+                    print(f"{' ' * ((display_width - len('Song finished - press [enter] to return')) // 2)}{prompt}", end = "")
                     while input_thread.is_alive():
                         wait(TIMER_RESOLUTION)
 
@@ -1195,9 +1223,9 @@ Playback modes:
             index:int = int(command) - 1
             if index >= 0 and index < len(self.queue):
                 self.remove_queued_item(remove_at_index = index)
-            else: # If the command is a number, but isn't a valid index
-                self.input_command(command, index_search_enabled = False)
-        except: # If the command can't be cast to a number
+                return
+            # If the command is a number but isn't a valid index, go to the "finally" block
+        finally: # If the command can't be cast to a number
             self.input_command(command, index_search_enabled = False)
 
     # Takes in the user's input and tries to find a corresponding command with list_actions()
@@ -1269,7 +1297,7 @@ Playback modes:
         if len(separators_directory) == 1:
             separators_directory.clear() # No need to use separators between each section if there is only 1 section
         
-        # Handle cases where there are no valid results (Guaranteed to return)
+        # Handle cases where there are no valid results
         if len(results) == 0:
             print(self.listing_info[list_type]["no results"]["message"])
             block_until_input()
