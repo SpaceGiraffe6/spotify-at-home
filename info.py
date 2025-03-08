@@ -34,6 +34,15 @@ class Colors(Enum):
     purple = "\033[0;35m"
     bolded_purple = "\033[1;35"
     light_purple = "\033[1;35m"
+# Defaults to blue
+def color(string:str, color:Colors = Colors.blue) -> str:
+    return f"{color.value}{string}\033[0m"
+# Removes all color and reset tags from string and returns the processed string
+def remove_tags(string:str) -> str:
+    for tag in Colors._value2member_map_.keys(): # Iterate through the values of the enums in Colors
+        string = string.replace(tag, "")
+
+    return string
 
 STANDARD_SONG_LENGTH:int = 180 # Used to scale the weight of each song by its length
 BASE_SONG_WEIGHT:int = 120 # because 120 is divisible by almost everything
@@ -54,3 +63,26 @@ ATTRIBUTES_COLORING_ORDER:"list[SongAttributes]" = [SongAttributes.disabled, Son
 
 # Each song can only have up to one of the modifiers in each set at the same time
 EXCLUSIVE_MODIFIERS:"list[set[Modifiers]]" = [{Modifiers.hot, Modifiers.cold}]
+
+# class Keybind:
+#     all_keybinds:"dict[str, list]" = {}
+#     active_keybinds:set = set()
+#     def __init__(self, key:str, action:function, description:str = "", active:bool = True):
+#         self.key:str = key
+#         self.action:function = action
+#         self.active:bool = active
+#         if self.active:
+            
+
+#         if not description:
+#             description = f"Keybind for [{key}]"
+#         self.description:str = description
+    
+
+
+    # def __str__(self) -> str:
+    #     return self.description
+    # def __repr__(self) -> str:
+    #     return str(self)
+    # def __hash__(self) -> int:
+    #     return hash(self.key)

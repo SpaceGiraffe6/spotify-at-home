@@ -4,9 +4,8 @@ from time import sleep as wait, time
 from wave import open as open_wav
 from typing import Union
 
-from info import LYRIC_PLACEHOLDER_CHARACTER, Modifiers, Colors, SongAttributes, BASE_SONG_WEIGHT, STANDARD_SONG_LENGTH
-from info import ATTRIBUTES_COLORING_ORDER, MODIFIERS_COLORING_ORDER
-from info import TIMER_RESOLUTION
+from info import *
+
 # time: a string representing a time in mm:ss.ss format
 # converts and returns the time in seconds w/ decimals
 def to_seconds(time:str) -> float:
@@ -25,8 +24,8 @@ class Song:
         self.song_name:str = song_name
 
         with open_wav(file_name, "r") as file:
-            self.duration = ceil(file.getnframes() / file.getframerate())
-        self.curr_duration:int = 0
+            self.duration:int = ceil(file.getnframes() / file.getframerate())
+        self.curr_duration:int = 1
         self.start_time = None
 
         # KEYS IN attributes MUST MATCH KEYS IN enabled_colors IN spotify.list_actions
@@ -66,7 +65,7 @@ class Song:
     def __str__(self) -> str:
         return self.song_name
 
-    def get_listing_colors(self) -> "list[Colors]":
+    def get_listing_colors(self) -> "list[tuple[SongAttributes, list[Colors]]]":
         if self.attributes_changed: # Return the colors that were last used for this song if none of the song's attributes have been changed since then
             self.listing_colors.clear()
 
@@ -101,7 +100,7 @@ class Song:
 
     # Don't call this function from the main thread
     def start_timer(self) -> None:
-        self.curr_duration = 0
+        self.curr_duration = 1
         self.start_time = time()
 
         while self.curr_duration < self.duration: # Outer loop iterates roughly once per second
@@ -126,24 +125,19 @@ class Song:
     def disable(self) -> None:
         self.attributes[SongAttributes.disabled] = True
         self.recalculate_weight(synced_songs_count = None) # synced_songs_count won't be used if the song is disabled
-        self.attributes_changed = True
     def enable(self) -> None:
         self.attributes[SongAttributes.disabled] = False
         self.recalculate_weight(synced_songs_count = Song.parent_player.get_synced_count(self.song_name))
-        self.attributes_changed = True
 
-    def update_sequence(self, sequence:"list[str]"):
-        prev_sequence_attribute:bool = self.attributes[SongAttributes.sequenced]
+    def update_sequence(self, new_sequence:"list[str]"):
+        self.attributes_changed = (self.attributes[SongAttributes.sequenced] != bool(new_sequence))
 
-        if sequence:
+        if new_sequence:
             self.attributes[SongAttributes.sequenced] = True
-            self.sequence = sequence
+            self.sequence = new_sequence
         else:
             self.attributes[SongAttributes.sequenced] = False
             self.sequence.clear()
-
-        if prev_sequence_attribute != self.attributes[SongAttributes.sequenced]:
-            self.attributes_changed = True
 
     # Pass in nothing to modifiers to only update the weight based on synced_songs_count
     # Adding a modifier that has already been added won't do anything
@@ -161,14 +155,15 @@ class Song:
         self.recalculate_weight(synced_songs_count = 1)
 
     # Only called from within this object
-    def recalculate_weight(self, synced_songs_count:int) -> None:
+    def recalculate_weight(self, synced_songs_count:int = 1) -> None:
         if self.attributes[SongAttributes.disabled]:
             self.weight = 0
         else:
             synced_songs_count = max(synced_songs_count, 1)
 
             self.weight = self.BASE_WEIGHT
-            for modifier in self.attributes[SongAttributes.modifiers]:
-                self.weight = modifier.value["weight update"](self.weight, synced_songs_count)
+            for modifier in MODIFIERS_COLORING_ORDER:
+                if modifier in self.attributes[SongAttributes.modifiers]:
+                    self.weight = modifier.value["weight update"](self.weight, synced_songs_count)
         
         self.attributes_changed = True
