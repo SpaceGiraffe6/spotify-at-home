@@ -259,24 +259,6 @@ class ReturnFlags(Enum):
     UnrecognizedInput = 1 # Currently only used when returning listing results for ListModes.ListCreation
 
 
-# To be implemented
-class Command:
-    def __init__(self, keyword:str, action:"function", requires_exact:bool = False, hidden:bool = False):
-        self.keyword = keyword
-        self.action = action
-        self.requires_exact = requires_exact
-        self.hidden = hidden
-
-    def run(self):
-        self.action()
-    
-    def __str__(self) -> str:
-        return (self.keyword if not self.hidden else "")
-    def __repr__(self) -> str:
-        return (self.keyword if not self.hidden else color(self.keyword, Colors.faint))
-    def __hash__(self) -> int:
-        return hash(self.keyword)
-
 class Keybind:
     directory:"dict[str, Keybind]" = {}
     active_keys:"set[str]" = set()
@@ -430,8 +412,15 @@ class spotify:
         self.exit_later:bool = False
 
         self.playing:bool = True
+        self.pause_bookmark_index:int = None # The index of the song to restart after resuming. Will be reset to None by self.set_next_song() after resuming
         self.terminated:bool = False
         self.interlude_flag:bool = True # Whether there will be a cooldown period before the next song plays. Will be (re)set to True when the next song starts playing
+
+        self.indicator_conditions:dict[str, bool] = {
+            "🎤" : (lambda : bool(self.curr_song.lyrics)),
+            "🔁" : (lambda : self.encore_activated),
+            "⌛" : (lambda : self.exit_later)
+        }
 
         self.listing_info:dict[ListModes, dict[str, any]] = {
             ListModes.Songs : {
@@ -505,11 +494,16 @@ class spotify:
 
         self.key_command_buffer:str = None
         # Add the key commands
-        Keybind(" ", self.pause_or_resume, description = "pause/resume")
-        Keybind("r", self.encore, description = "repeat the current song")
+        Keybind(" ", lambda : self.pause() if self.playing else self.resume(), description = "pause/resume")
+        Keybind("e", self.encore, description = "repeat the current song")
+        Keybind(">", self.skip, description = "skip to the next song")
+        Keybind("k", self.karaoke, description = "enter karaoke mode (if lyrics are available)")
         Keybind("l", self.list_songs, description = "list songs")
-        Keybind("e", self.stop, description = "terminate the program")
+        Keybind("x", self.stop, description = "terminate the program")
+        Keybind("c", self.delayed_exit, description = "terminate the program after the current song ends")
         Keybind("h", self.display_keybinds, description = "list all keybinds")
+        
+        self.autoupdating:bool = False
 
     # Returns the number of songs synced with this song, including this song
     def get_synced_count(self, song_name:str) -> int:
@@ -558,6 +552,7 @@ class spotify:
     # Stops the program after the current song ends
     def delayed_exit(self) -> None:
         self.exit_later = not self.exit_later
+        self.autoupdating = False # Keyboard inputs will not work if program exits while getch() is active (while in standby mode)
         self.update_ui()
 
     # Uses self.list_actions to edit selected_names using the items in selection_pool
@@ -958,7 +953,7 @@ class spotify:
 
             self.update_ui()
 
-    # Only call these playback functions from the play_next_song function
+    # Only call these playback functions from set_next_song()
     # The playback mode functions will only run if the queue is empty
     # These functions will not add songs to the queue and will only set self.curr_song to the next song without playing it
     def repeat(self) -> None:
@@ -969,7 +964,7 @@ class spotify:
         if self.bookmark_index != None:
             self.curr_song_index = self.bookmark_index
             self.bookmark_index = None
-        song_name:str = self.increment_song_index()
+        self.increment_song_index()
 
         first_check:bool = False # Becomes True after the first time the loop checks the song at next_index so I can know if the loop has cycled through everything
         stop_index:int = self.curr_song_index
@@ -981,7 +976,7 @@ class spotify:
                     print(color("No available songs found!", Colors.red))
                     print("Playing next existing song...")
                     break
-            song_name = self.increment_song_index()
+            self.increment_song_index()
 
         self.curr_song = self.songs[song_name]
         if song_name in self.sequences:
@@ -1014,37 +1009,27 @@ class spotify:
 
     # Helper function
     # Automatically makes curr_song_index wrap around when it equals/exceeds the length of song_names
-    def increment_song_index(self, increment:int = 1) -> str: # Returns the name of the song at the new index
-        self.curr_song_index += increment % len(self.song_names)
-        if self.curr_song_index >= len(self.song_names): # Wrap around
-            self.curr_song_index -= len(self.song_names)
-        
-        return self.song_names[self.curr_song_index]
+    # Sets both curr_song and curr_song_index to reflect the new, incremented index
+    def increment_song_index(self, increment:int = 1) -> None:
+        self.curr_song_index = (self.curr_song_index + increment) % len(self.song_names)
+        self.curr_song = self.songs[self.curr_song_index]
 
-    # Pauses or resumes the player based on whether self.playing is True
-    # Only used in keybinds
-    def pause_or_resume(self) -> None:
-        if self.playing:
-            self.pause()
-        else:
-            self.resume()
     def pause(self) -> None:
-        if self.playing:
+        if self.playing: # Check just in case
             self.playing = False
+            self.pause_bookmark_index = self.curr_song_index
             PlaySound("1s_silence", SND_ASYNC)
 
-        self.remaining_interlude_indicator = None
-        hide_cursor()
-        print(color("Pausing...", Colors.faint))
-        wait(1 + TIMER_RESOLUTION + 0.25)
-        self.update_ui()
+            self.remaining_interlude_indicator = None
+            hide_cursor()
+            print(color("Pausing...", Colors.faint))
+            wait(1 + TIMER_RESOLUTION + 0.25)
+            self.update_ui()
     # Resuming the player will restart the song that was playing before the pause
     def resume(self) -> None:
-        if not self.playing:
+        if not self.playing: # Check just in case
             if self.remaining_interlude_indicator: # If the player was paused in the middle of an interlude
                 self.remaining_interlude_indicator = ""
-            else: # The new song would've already been set during the interlude but wouldn't've started to play yet
-                self.encore_activated = True # Use the encore feature to prevent play_next_song() from picking a new song
             
             self.interlude_flag = False # Temporarily disable the cooldown between songs
             self.playing = True # Resume the loop in the song-playing thread
@@ -1055,6 +1040,7 @@ class spotify:
         self.update_ui()
     def skip(self) -> None:
         self.playing = False
+        # Don't bookmark the current song
         PlaySound("1s_silence.wav", SND_ASYNC)
 
         print("Picking the next song...")
@@ -1075,7 +1061,13 @@ class spotify:
         return
 
     def set_next_song(self) -> None:
-        if self.encore_activated:
+        if self.pause_bookmark_index: # Restart the song that was playing before the pause
+            self.curr_song_index = self.pause_bookmark_index
+            self.curr_song = self.songs[self.song_names[self.curr_song_index]]
+
+            self.pause_bookmark_index = None
+
+        elif self.encore_activated:
             self.encore_activated = False
             # Do nothing to curr_song and curr_song_index so the same song repeats
         else: # Don't update the sequence if the song is an encore
@@ -1097,7 +1089,8 @@ class spotify:
                     self.remove_queued_item_at_index(0) # Silently remove the item
                 else:
                     mode_actions[self.mode](self) # Select the next song based on the current playback mode
-                # Only activate the sequence if there wasn't already an active sequence
+
+                # Only activate the sequence if there isn't already an active sequence
                 if (self.curr_song.song_name in self.sequences) and (len(self.sequence) == 0):
                     # Make a copy of the song's sequence so song names can be removed
                     self.sequence = self.sequences[self.curr_song.song_name].copy()
@@ -1105,6 +1098,7 @@ class spotify:
         self.song_log.append(self.curr_song.song_name)
 
     # Call this function from the song-playing thread
+    # If force_song_name is specified, the named song will override all other priorities with NO ERROR CHECKING
     def play_next_song(self) -> None:
         # Delay on updating the save file if delayed exit is not toggled because there is a gap between when curr_song is set to the queued item and when the item is removed from the queue
         if self.exit_later: # Guaranteed to return
@@ -1174,7 +1168,11 @@ class spotify:
         # Constant variables
         delay:float = 0.3 # Number of seconds to delay the lyrics by to compensate for lag
         max_display_range:int = 10 # Max number of lines before/after the current line of lyrics to display
+        
         lyrics:list[dict[str, any]] = self.curr_song.lyrics # Each line's text includes a newline character at the end
+
+        clear_console()
+        hide_cursor()
 
         if not lyrics:
             print("Lyrics aren't available for this song...")
@@ -1183,8 +1181,6 @@ class spotify:
             return
 
         # If lyrics were found
-        clear_console()
-        hide_cursor()
         display_width:int = get_terminal_size().columns
         display_height:int = get_terminal_size().lines
         empty_line:str = " " * display_width
@@ -1277,6 +1273,11 @@ class spotify:
                         self.update_ui()
 
     def update_ui(self, command:str = "") -> None: # The command parameter is used when update_ui() is called via self.listing_info
+        # Divert to autoupdate mode if it has already been activated
+        if self.autoupdating:
+            self.autoupdate_ui()
+            return
+        
         clear_console() # Clear the console
         self.save()
 
@@ -1316,6 +1317,14 @@ class spotify:
         finally: # If the command can't be cast to a number
             self.input_command(command, index_search_enabled = False)
     def autoupdate_ui(self) -> None:
+        if self.exit_later: # Keyboard inputs will break if program exits while getch() is active
+            print("Cannot enter standby mode while there is a delayed exit!")
+            block_until_input()
+            self.update_ui()
+
+        self.save() # If self.update_ui() diverted to here
+
+        self.autoupdating = True
         input_thread:Thread = Thread(target = self.get_key_command, name = "Standby mode input listener", daemon = True)
         input_thread.start()
 
@@ -1328,7 +1337,7 @@ class spotify:
             queue_lines_count:int = self.print_next_songs(max_lines = get_terminal_size().lines - header_lines_count - 2) # -2 for the "Standby mode" lines
             if queue_lines_count > 0:
                 print() # Separate the sequence/queue from the next line
-            print(f"{color('Standby mode - ', Colors.faint)}{Keybind.directory['h']}, press any other key to return", end = "")
+            print(f"{color('Standby mode - ', Colors.faint)}{Keybind.directory['h']}, press any unbinded key to return", end = "")
             # If there's space, add an extra empty line to clear anything that might've ended up there
             if (header_lines_count + queue_lines_count + 2) < get_terminal_size().lines:
                 print(f"\n{' ' * get_terminal_size().columns}", end = "")
@@ -1349,30 +1358,47 @@ class spotify:
                         if not input_thread.is_alive():
                             if not self.run_key_command():
                                 # If a valid key input has not been entered
+                                self.autoupdating = False # Only disable autoupdate mode if the key input wasn't a valid key command
                                 self.update_ui()
                             return
+            
+            # If the player is currently paused when entering autoupdate mode
+            elif not self.playing:
+                while not self.playing:
+                    wait(TICK_DURATION)
+
+                    # Call self.update_ui() once a key (including the "pause/resume" key command) is entered
+                    if not input_thread.is_alive():
+                        if not self.run_key_command():
+                            # If a valid key input has not been entered
+                            self.autoupdating = False # Only disable autoupdate mode if the key input wasn't a valid key command
+                            self.update_ui()
+                        return
 
             # If a song is currently playing
             else:
+                total_duration_string_length:int = len(to_minutes_str(self.curr_song.duration)) # Number of spaces to reserve for the current duration display
                 # Prepare the cursor position for updating the song duration display
                 # The cursor would've already been moved to the first line
-                cursor_right(spaces = len("Currently playing: ") + self._max_song_name_length + 4)# + count_wide_characters(self.curr_song.song_name)) # Move the cursor past fewer characters if some of the characters are extra wide
+                cursor_right(spaces = len("Currently playing: ") + self._max_song_name_length + 3)# + count_wide_characters(self.curr_song.song_name)) # Move the cursor past fewer characters if some of the characters are extra wide
                 wait(TICK_DURATION) # Wait for the next song to start playing
 
                 # While the current song hasn't ended
-                while (self.curr_song.attributes[SongAttributes.playing]) and (self.remaining_interlude_indicator == None) and (input_thread.isAlive()):
-                    curr_duration_seconds:str = self.curr_song.curr_duration
+                while (self.curr_song.attributes[SongAttributes.playing]) and (self.remaining_interlude_indicator == None):
+                    curr_duration_seconds:int = self.curr_song.curr_duration
                     curr_duration_string:str = to_minutes_str(curr_duration_seconds)
                     # Move the cursor back and forth to update the duration display
-                    print(color(f"{curr_duration_string : >5}", Colors.light_blue), end = "")
-                    cursor_left(5)
+                    print(color(f"{curr_duration_string : >{total_duration_string_length}}", Colors.light_blue), end = "")
+                    cursor_left(total_duration_string_length)
                     
+                    # Wait ~1 second before updating the duration display
                     while curr_duration_seconds == self.curr_song.curr_duration:
                         wait(TIMER_RESOLUTION)
 
                         if not input_thread.is_alive():
                             if not self.run_key_command():
                                 # If a valid key input has not been entered
+                                self.autoupdating = False # Only disable autoupdate mode if the key input wasn't a valid key command
                                 self.update_ui()
                             return
 
@@ -1382,21 +1408,19 @@ class spotify:
     def print_ui_header(self) -> int:
         lines_printed:int = 0
 
-        indicator_conditions:dict[str, bool] = {"🎤" : bool(self.curr_song.lyrics),
-                                                "🔁" : self.encore_activated,
-                                                "⌛" : self.exit_later}
         indicators:list[str] = []
-        for indicator, condition in indicator_conditions.items():
-            if condition == True:
+        for indicator, condition_function in self.indicator_conditions.items():
+            if condition_function() == True:
                 indicators.append(indicator)
 
         # indicators will become a string either way
-        indicators:str = "| " + " ".join(indicators) if len(indicators) else ""
-        duration_display = color(f"{f'{to_minutes_str(self.curr_song.curr_duration)}/{to_minutes_str(self.curr_song.duration)}' : >11}", Colors.light_blue)
+        indicators:str = "| " + " ".join(indicators) if indicators else ""
+        total_duration_string:str = to_minutes_str(self.curr_song.duration)
+        duration_display:str = color(f"{to_minutes_str(self.curr_song.curr_duration) : >{len(total_duration_string)}}/{total_duration_string}", Colors.light_blue)
 
-        currently_playing_line = f"Currently playing: {color(f'{self.curr_song.song_name : <{self._max_song_name_length - count_wide_characters(self.curr_song.song_name)}}', Colors.green)}   {duration_display} {indicators}"
+        currently_playing_line:str = f"Currently playing: {color(f'{self.curr_song.song_name : <{self._max_song_name_length - count_wide_characters(self.curr_song.song_name)}}', Colors.green)}   {duration_display} {indicators}"
         if self.remaining_interlude_indicator: # If the cooldown is active, ensure that there is enough sapce for the maximum size of the indicator while also adding spaces to match the length of the line with its length when a song is playing
-            currently_playing_line:str = f"{self.remaining_interlude_indicator : ^{max(len(remove_tags(currently_playing_line)) - len(indicators) - 1, self.COOLDOWN_BETWEEN_SONGS)}}"
+            currently_playing_line = f"{self.remaining_interlude_indicator : ^{max(len(remove_tags(currently_playing_line)) - len(indicators) - 1, self.COOLDOWN_BETWEEN_SONGS)}}"
         print(f"{currently_playing_line} | Playback mode: {color(f'{self.mode.name : <10}', Colors.orange)}")
         lines_printed += 1
         
@@ -1494,7 +1518,7 @@ Playback modes:
         print("Available key inputs:", end = "\n\n")
         for key in Keybind.active_keys:
             print(Keybind.directory[key])
-        print("Press any unmapped key to return", end = "\n\n")
+        print("Press any unmapped key to go back", end = "\n\n")
 
         print("Press a key to continue: ")
         self.get_key_command()
@@ -1580,8 +1604,8 @@ Playback modes:
 
         # result_type defaults to SearchResultType.Exact
         results_lists, results_type = results_lists if type(results_lists) == tuple else (results_lists, SearchResultType.Exact) # results_lists will automatically unpack if it's a tuple
-        # Mark the listed numbers before which separators should be placed
         results:list[Item] = []
+        # Store the list numbers before which separators should be placed
         separators_directory:dict[int, str] = {}
         curr_index:int = 0
         for separator, separated_list in results_lists:
@@ -1589,7 +1613,7 @@ Playback modes:
             separators_directory[curr_index] = separator if separator else "----------"
             curr_index += len(separated_list)
         if len(separators_directory) == 1:
-            separators_directory.clear() # No need to use separators between each section if there is only 1 section
+            del separators_directory[0] # No need to use separators between each section if there is only 1 section
         
         # Handle cases where there are no valid results
         # Returns None when program ends
@@ -1614,13 +1638,13 @@ Playback modes:
                 # listing_item_name will be None if list_type is Modifiers, so the remove_modifiers method would still clear all modifiers
                 if (not special_commands[result.name]["confirmation"]) or special_commands[result.name]["confirmation"](): # If there isn't a confirmation step or if the user confirms
                     # Uncomment after testing
-                    #try:
-                    return special_commands[result.name]["action"](song_name = listing_item_name)
-                    # except:
-                    #     # Remove after testing
-                    #     print(f"Error on call to command: {result.name}")
-                    #     block_until_input()
-                    #     return special_commands[result.name]["action"]()
+                    try:
+                        return special_commands[result.name]["action"](song_name = listing_item_name)
+                    except:
+                        # Remove after testing
+                        # print(f"Error on call to command: {result.name}")
+                        # block_until_input()
+                        return special_commands[result.name]["action"]()
                 else: # If the user doesn't confirm
                     return listmode_actions[list_type](self)
 
@@ -1904,7 +1928,7 @@ def play():
     player.interlude_flag = False # Disable the waiting period before the first song
     while True:
         if player.playing:
-            player.play_next_song() # Yields within 1.5 seconds after the player is paused
+            player.play_next_song()
         else:
             wait(TICK_DURATION) # Wait and check whether the user has resumed the player
 

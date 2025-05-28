@@ -57,7 +57,6 @@ class Song:
                 self.lyrics.append({"time" : to_seconds(line[:line.index(" ")]), "text" : line[line.index(" ") + 1:]})
         except:
             self.lyrics = None # In case something is wrong with the lyrics' formatting and only some of the lyrics were added
-            pass
         
         self.BASE_WEIGHT:int = BASE_SONG_WEIGHT + max(-BASE_SONG_WEIGHT//4, min(BASE_SONG_WEIGHT//4, (STANDARD_SONG_LENGTH - self.duration)//5)) # Slightly increase/decrease the weight of shorter/longer songs up to ±25% of the base song weight
         self.weight:int = self.BASE_WEIGHT
