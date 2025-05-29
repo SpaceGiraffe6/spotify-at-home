@@ -1282,20 +1282,10 @@ class spotify:
         self.save()
 
         if not command:
-            self.print_ui_header()
+            lines_printed:int = self.print_ui_header() + 1 # +1 for the following empty line
             print()
-            # # List the queue if it's not empty
-            # if len(self.queue) > 0 or len(self.sequence) > 0:
-            #     print("Up next:")
-            #     max_index_len:int = len(str(len(self.queue)))
-            #     for song_name in self.sequence:
-            #         print(f"{'-  ' : <{max_index_len + 2}}{color(song_name, SongAttributes.sequenced.value)}")
-                
-            #     # Print the queue
-            #     for i in range(len(self.queue)):
-            #         print(f"{f'{i + 1}. ' : <{max_index_len + 2}}{color(self.queue_song_names[i], Colors.purple)}")
-
-            queue_lines_count:int = self.print_next_songs()
+            
+            queue_lines_count:int = self.print_next_songs(get_terminal_size().lines - lines_printed - 2) # -2 for the following empty line and the input line
             if queue_lines_count > 0:
                 print()
 
@@ -1433,40 +1423,35 @@ class spotify:
             lines_printed += 1
         
         return lines_printed
-    def print_next_songs(self, max_lines:int = 999) -> int:
+    def print_next_songs(self, max_lines:int = 99) -> int:
         # Printing items requires at least 2 lines (more lines if there are more items)
-        if max_lines < 2 or (len(self.sequence) + len(self.queue_song_names) == 0):
+        if max_lines <= 1 or (len(self.sequence) + len(self.queue_song_names) == 0):
             return 0
         else: # If there are songs in the queue/sequence
-            lines_printed:int = 1
-            print("Up next:")
+            lines:list[str] = ["Up next: "]
             max_index_len:int = len(str(len(self.queue_song_names)))
 
             # Print the sequence
             # At this point, there is guaranteed to be at least one available line
-            for i in range(len(self.sequence)):
-                lines_printed += 1 # Prematurely add one, since each branch in the following "for" is guaranteed to print 1 line
-                
-                # If this is the last available line and there are more songs in the sequence
-                if lines_printed == max_lines and i < len(self.sequence) - 1:
-                    print("...")
-                    break
-                else:
-                    print(f"{'-  ' : <{max_index_len + 2}}{color(self.sequence[i], SongAttributes.sequenced.value)}")
+            for sequence_song_name in self.sequence:
+                lines.append(f"{'-  ' : <{max_index_len + 2}}{color(sequence_song_name, SongAttributes.sequenced.value)}")
             
-            if lines_printed < max_lines:
-                # Print the queue
-                for i in range(len(self.queue_song_names)):
-                    lines_printed += 1 # Prematurely add one, since each branch in the following "for" is guaranteed to print 1 line
-                    
-                    # If this is the last available line and there are more songs in the queue
-                    if lines_printed == max_lines and i < len(self.queue_song_names) - 1:
-                        print("...")
-                        break
-                    else:
-                        print(f"{f'{i + 1}. ' : <{max_index_len + 2}}{color(self.queue_song_names[i], SongAttributes.queued.value)}")
+            # Print the queue
+            for queue_index in range(len(self.queue_song_names)):
+                lines.append(f"{f'{queue_index + 1}. ' : <{max_index_len + 2}}{color(self.queue_song_names[queue_index], SongAttributes.queued.value)}")                    
+                # Add the sequence of this queued song, if there is one
+                # get() returns an empty list if no sequence is found
+                lines.extend([f"    {color('|', Colors.faint)}{color(sequence_song_name, SongAttributes.sequenced.value)}" for sequence_song_name in self.sequences.get(self.queue_song_names[queue_index], [])])
 
-            return lines_printed # lines_printed will not exceed max_lines
+            # Number of printed lines will not exceed max_lines
+            if len(lines) <= max_lines:
+                print("\n".join(lines))
+                return len(lines)
+
+            else: # If not all the lines could be fitted
+                print("\n".join(lines[:(max_lines - 1)]))
+                print("...")
+                return max_lines
     
     def display_help(self) -> None:
         print("Available commands (in blue)")
