@@ -57,9 +57,10 @@ class SongAttributes(Enum):
     playing = Colors.green
     disabled = Colors.faint
     queued = Colors.purple
-    sequenced = Colors.yellow
+    has_sequence = Colors.yellow
+    sequenced = Colors.light_yellow
     modifiers = None
-ATTRIBUTES_COLORING_ORDER:"list[SongAttributes]" = [SongAttributes.disabled, SongAttributes.playing, SongAttributes.queued, SongAttributes.sequenced, SongAttributes.modifiers]
+ATTRIBUTES_COLORING_ORDER:"list[SongAttributes]" = [SongAttributes.disabled, SongAttributes.playing, SongAttributes.queued, SongAttributes.has_sequence, SongAttributes.sequenced, SongAttributes.modifiers]
 
 # Each song can only have up to one of the modifiers in each set at the same time
 EXCLUSIVE_MODIFIERS:"list[set[Modifiers]]" = [{Modifiers.hot, Modifiers.cold}]

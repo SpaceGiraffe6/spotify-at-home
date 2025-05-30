@@ -32,6 +32,7 @@ class Song:
         self.attributes:dict[SongAttributes, Union(bool, set)] = {SongAttributes.playing : False, # This attribute is updated from the play function, not from Spotify
                                                         SongAttributes.disabled : False,
                                                         SongAttributes.queued : False,
+                                                        SongAttributes.has_sequence : False,
                                                         SongAttributes.sequenced : False,
                                                         SongAttributes.modifiers : set()}
         self.attributes_changed:bool = True
@@ -132,11 +133,20 @@ class Song:
         self.attributes_changed = (self.attributes[SongAttributes.sequenced] != bool(new_sequence))
 
         if new_sequence:
-            self.attributes[SongAttributes.sequenced] = True
+            # Update the sequenced status of songs in both the old and new lists
+            for song_name in set(new_sequence) - set(self.sequence):
+                Song.parent_player.songs[song_name].attributes[SongAttributes.sequenced] = True
+            for song_name in set(self.sequence) - set(new_sequence):
+                Song.parent_player.songs[song_name].attributes[SongAttributes.sequenced] = False
+
             self.sequence = new_sequence
+            self.attributes[SongAttributes.has_sequence] = True
         else:
-            self.attributes[SongAttributes.sequenced] = False
+            for song_name in self.sequence:
+                Song.parent_player.songs[song_name].attributes[SongAttributes.sequenced] = False
+
             self.sequence.clear()
+            self.attributes[SongAttributes.has_sequence] = False
 
     # Pass in nothing to modifiers to only update the weight based on synced_songs_count
     # Adding a modifier that has already been added won't do anything
