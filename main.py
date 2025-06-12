@@ -321,9 +321,9 @@ class Keybind:
 
 class spotify:
     # Constant + static variables
-    COOLDOWN_BETWEEN_SONGS:int = 8 # Seconds
+    DEFAULT_INTERLUDE_DURATION:int = 8 # Seconds
     # When the playback mode is shuffle, the minimum number of songs that would have to play between each repeat
-    COOLDOWN_BETWEEN_REPEATS:int = 5 # Will be capped at len(playlist) - 1 in the constructor
+    DEFAULT_REPEAT_COOLDOWN:int = 5 # Will be capped at len(playlist) - 1 in the constructor
     
     DEFAULT_PLAYBACK_MODE:str = "Shuffle" # Name of the default playback mode, used if one isn't saved in the save file
     SAVE_FILE_PATH:str = "save_file.json"
@@ -414,9 +414,9 @@ class spotify:
                     if sequenced_names[sequenced_index] not in self.song_names:
                         del sequenced_names[sequenced_index]
 
-        self.COOLDOWN_BETWEEN_SONGS = max(0, self.COOLDOWN_BETWEEN_SONGS)
+        self.interlude_duration:int = max(0, self.DEFAULT_INTERLUDE_DURATION)
         self.remaining_interlude_indicator:str = None # Indicates how much time is left for the cooldown period between this song and the next one
-        self.COOLDOWN_BETWEEN_REPEATS = min(len(self.song_names) - 1, self.COOLDOWN_BETWEEN_REPEATS)
+        self.cooldown_between_repeats:int = min(len(self.song_names) - 1, self.DEFAULT_REPEAT_COOLDOWN)
         self.songs_on_cooldown:list[list[str]] = []
 
         self.encore_activated:bool = False
@@ -490,7 +490,7 @@ class spotify:
             ListModes.Playlist : {
                 "header line" : "Select a command to run for {item_name}",
                 "special commands" : {"play" : {"confirmation" : None, "action" : (lambda playlist_name:self.activate_playlist(playlist_name))},
-                                    "deactivate" : {"confirmation" : None, "action" : self.deactivate_playlist},
+                                    "stop" : {"confirmation" : None, "action" : self.deactivate_playlist},
                                     "edit" : {"confirmation" : None, "action" : (lambda playlist_name:self.edit_playlist(playlist_name))},
                                     "clear" : {"confirmation" : confirmation, "action" : (lambda playlist_name:self.clear_playlist(playlist_name))}
                                     },
@@ -701,15 +701,16 @@ class spotify:
 
     def view_playlist(self, playlist_name:str):
         # self.list_actions is guaranteed to run a command
-        self.list_actions(results_lists = initial_results(section("Commands: ", ["q", "quit", ("deactivate" if self.active_playlist and self.active_playlist.name == playlist_name else "play"), "edit", "clear"], ItemType.Command)), list_type = ListModes.Playlist, listing_item_name = playlist_name)
+        self.list_actions(results_lists = initial_results(section("Commands: ", ["q", "quit", ("stop" if self.active_playlist and self.active_playlist.name == playlist_name else "play"), "edit", "clear"], ItemType.Command)), list_type = ListModes.Playlist, listing_item_name = playlist_name)
 
     def activate_playlist(self, playlist_name:str, silent:bool = False):
         self.active_playlist = self.playlists[playlist_name]
+        self.songs_on_cooldown = self.songs_on_cooldown[:min(len(self.active_playlist.song_names) - 1, self.cooldown_between_repeats)]
         self.playlist_started = False
 
         if not silent:
             clear_console()
-            print(f"{color(playlist_name, Colors.bold)} is now playing")
+            print(f"{color(playlist_name, Colors.bold)} will begin after the current song ends")
             block_until_input()
             self.update_ui()
     def deactivate_playlist(self, silent:bool = False):
@@ -718,7 +719,7 @@ class spotify:
 
         if not silent:
             clear_console()
-            print(f"{color(deactivated_playlist_name, Colors.bold)} is now deactivated")
+            print(f"{color(deactivated_playlist_name, Colors.bold)} has been deactivated")
             block_until_input()
             self.update_ui()
 
@@ -1133,50 +1134,47 @@ class spotify:
                 self.curr_song_index = randint(0, len(self.song_names) - 1)
                 self.curr_song = self.songs[self.song_names[self.curr_song_index]]
     def loop(self) -> None:
-        if self.bookmark_index != None:
-            self.curr_song_index = self.bookmark_index
-            self.curr_song = self.songs[self.song_names[self.curr_song_index]]
+        enabled_song_found:bool = False
+
+        if self.active_playlist:
+            if self.active_playlist.curr_song_index == None: # Start the new playlist from the beginning
+                self.active_playlist.curr_song_index = 0
+            else: # If the playlist has already been started, increment its index
+                if self.bookmark_index != None: # If a sequence was activated from the playlist and has been completed, return the playlist's curr_song_index to the index of the song that activated the sequence
+                    self.active_playlist.curr_song_index = self.active_playlist.song_names.index(self.song_names[self.bookmark_index])
+                    self.bookmark_index = None
+                self.active_playlist.curr_song_index = (self.active_playlist.curr_song_index + 1) % len(self.active_playlist.song_names)
+
+            # The song index will have already been incremented by 1, if needed
+            for song in self.active_playlist.songs[self.active_playlist.curr_song_index:] + self.active_playlist.songs[:self.active_playlist.curr_song_index]:
+                if not song.attributes[SongAttributes.disabled]:
+                    self.curr_song = song
+                    self.curr_song_index = song.index
+                    self.active_playlist.curr_song_index = self.active_playlist.song_names.index(song.song_name)
+                    enabled_song_found = True
+                    break
             
-            if self.active_playlist and (self.curr_song.song_name in self.active_playlist.song_names):
-                self.active_playlist.curr_song_index = self.active_playlist.song_names.index(self.curr_song.song_name)
+            if not enabled_song_found: # Play the next song in the active playlist, regardless of whether it's enabled
+                self.curr_song = self.active_playlist.songs[self.active_playlist.curr_song_index]
+                self.curr_song_index = self.curr_song.index
+
+        else: # If there is no active playlist
+            if self.bookmark_index != None:
+                self.curr_song_index = self.bookmark_index
+                self.bookmark_index = None
+
+            # Increment the song index by 1 during splicing
+            for song_name in self.song_names[self.curr_song_index + 1:] + self.song_names[:self.curr_song_index + 1]:
+                if not self.songs[song_name].attributes[SongAttributes.disabled]:
+                    self.curr_song_index = self.song_names.index(song_name)
+                    self.curr_song = self.songs[song_name]
+                    enabled_song_found = True
+                    break
             
-            self.bookmark_index = None
-        else:
-            enabled_song_found:bool = False
+            if not enabled_song_found: # Play the next song, regardless of whether it's enabled
+                self.curr_song_index = (self.curr_song_index + 1) % len(self.song_names)
+                self.curr_song = self.songs[self.song_names[self.curr_song_index]]
 
-            if self.active_playlist:
-                if self.active_playlist.curr_song_index == None: # Start the new playlist from the beginning
-                    self.active_playlist.curr_song_index = 0
-                else: # If the playlist has already been started, increment its index
-                    self.active_playlist.curr_song_index = (self.active_playlist.curr_song_index + 1) % len(self.active_playlist.song_names)
-
-                for song in self.active_playlist.songs[self.active_playlist.curr_song_index:] + self.active_playlist.songs[:self.active_playlist.curr_song_index]:
-                    if not song.attributes[SongAttributes.disabled]:
-                        self.curr_song = song
-                        self.curr_song_index = song.index
-                        self.active_playlist.curr_song_index = self.active_playlist.song_names.index(song.song_name)
-                        enabled_song_found = True
-                        break
-                
-                if not enabled_song_found: # Play the next song in the active playlist, regardless of whether it's enabled
-                    self.curr_song = self.active_playlist.songs[self.active_playlist.curr_song_index]
-                    self.curr_song_index = self.curr_song.index
-
-            else: # If there is no active playlist
-                for song_name in self.song_names[self.curr_song_index + 1:] + self.song_names[:self.curr_song_index + 1]:
-                    if not self.songs[song_name].attributes[SongAttributes.disabled]:
-                        self.curr_song_index = self.song_names.index(song_name)
-                        self.curr_song = self.songs[song_name]
-                        enabled_song_found = True
-                        break
-                
-                if not enabled_song_found: # Play the next song, regardless of whether it's enabled
-                    self.curr_song_index = (self.curr_song_index + 1) % len(self.song_names)
-                    self.curr_song = self.songs[self.song_names[self.curr_song_index]]
-
-            # Bookmark the current song index if it initiated a sequence
-            if self.curr_song.song_name in self.sequences:
-                self.bookmark_index = self.curr_song_index
     def shuffle(self) -> None:
         available_song_names:list[str] = self.active_playlist.song_names if self.active_playlist else self.song_names
         # Filter out queued, cooldown, and disabled songs
@@ -1197,25 +1195,24 @@ class spotify:
                 target_weight -= self.songs[song_name].weight
                 if target_weight <= 0: # Select this song
                     self.curr_song = self.songs[song_name]
-                    self.curr_song_index = available_song_names.index(song_name)
+                    self.curr_song_index = self.curr_song.index
+
+                    self.active_playlist.curr_song_index = available_song_names.index(song_name)
                     break
         
         # If there are no available songs
         else: # The constructor would've caught/corrected the error if self.cooldown_between_repeats was too high
-            self.curr_song_index = randint(0, len(available_song_names) - 1)
-            self.curr_song = self.songs[available_song_names[self.curr_song_index]]
+            if self.active_playlist:
+                self.active_playlist.curr_song_index = randint(0, len(available_song_names) - 1)
+                self.curr_song = self.active_playlist.songs[self.active_playlist.curr_song_index]
+                self.curr_song_index = self.curr_song.index
+            else:
+                self.curr_song_index = randint(0, len(available_song_names) - 1)
+                self.curr_song = self.songs[available_song_names[self.curr_song_index]]
         
         # This function is guaranteed to set self.curr_song_index to the current song's index in the active playlist
         if self.active_playlist:
             self.playlist_started = True
-
-    def get_available_song_names(self) -> "list[str]":
-        return self.song_names if not self.active_playlist else self.active_playlist.song_names
-    # Helper function
-    # Automatically makes curr_song_index wrap around when it equals/exceeds the length of song_names
-    # Sets curr_song_index to the new, incremented index
-    def increment_song_index(self, increment:int = 1) -> None:
-        self.curr_song_index = (self.curr_song_index + increment) % len(self.song_names if not self.active_playlist else self.active_playlist.songs)
 
     def pause(self) -> None:
         if self.playing: # Check just in case
@@ -1278,7 +1275,7 @@ class spotify:
                 song:Song = self.songs[self.sequence[0]]
                 del self.sequence[0]
                 self.curr_song = song
-                self.curr_song_index = self.song_names.index(song.song_name)
+                self.curr_song_index = song.index
 
                 self.playlist_started = False
             else:
@@ -1286,7 +1283,7 @@ class spotify:
                     song:Song = self.queue[0]
                     if song:
                         self.curr_song = song
-                        self.curr_song_index = self.song_names.index(song.song_name)
+                        self.curr_song_index = song.index
                     else: # If the queued song is a placeholder
                         mode_actions[self.mode](self)
                     
@@ -1295,10 +1292,12 @@ class spotify:
                 else:
                     mode_actions[self.mode](self) # Select the next song based on the current playback mode
 
-                # Only activate the sequence if there isn't already an active sequence
+                # Only activate a sequence if there isn't already an active sequence
                 if (self.curr_song.song_name in self.sequences) and (len(self.sequence) == 0):
                     # Make a copy of the song's sequence so song names can be removed
                     self.sequence = self.sequences[self.curr_song.song_name].copy()
+                    # Bookmark the new song's index if it initiated a sequence
+                    self.bookmark_index = self.curr_song_index
 
         self.song_log.append(self.curr_song.song_name)
 
@@ -1312,7 +1311,7 @@ class spotify:
 
         self.set_next_song()
         # Update the songs on cooldown
-        if len(self.songs_on_cooldown) >= self.COOLDOWN_BETWEEN_REPEATS:
+        if len(self.songs_on_cooldown) >= self.cooldown_between_repeats:
             del self.songs_on_cooldown[0]
         
         # Add any synced songs and the next song itself to the cooldown list
@@ -1322,11 +1321,11 @@ class spotify:
         wait(TICK_DURATION)
         if self.playing: # If this song has ended naturally and not because the user paused the player
             if self.interlude_flag: # Interlude flag will be set to false when playing the first song so that everything saves BEFORE waiting and then playing each subsequent song
-                self.remaining_interlude_indicator = "-" * self.COOLDOWN_BETWEEN_SONGS
+                self.remaining_interlude_indicator = "-" * self.interlude_duration
                 
                 wait(ceil(TICK_DURATION) - TICK_DURATION) # A TICK_DURATION of time has already been waited before self.playing was checked, so a TICK_DURATION has to be taken off the first second of wait time here
                 self.remaining_interlude_indicator = self.remaining_interlude_indicator[1:] # Remove a character from the cooldown indicator after the first second
-                for seconds_remaining in range(self.COOLDOWN_BETWEEN_SONGS - 1, -1, -1):
+                for seconds_remaining in range(self.interlude_duration - 1, -1, -1):
                     wait(1)
                     if not self.playing: # If the player was paused during the interlude
                         return # Jump back to the loop in play() in the main thread
@@ -1544,7 +1543,7 @@ class spotify:
             # If an interlude is ongoing
             if self.remaining_interlude_indicator != None:
                 while self.remaining_interlude_indicator != None:
-                    print(f"{self.remaining_interlude_indicator : ^{max(len('Currently playing: ') + self.max_song_name_length + 13, self.COOLDOWN_BETWEEN_SONGS)}}", end = "") # +13 for the spaces reserved for the song duration display and the spaces between each segment
+                    print(f"{self.remaining_interlude_indicator : ^{max(len('Currently playing: ') + self.max_song_name_length + 13, self.interlude_duration)}}", end = "") # +13 for the spaces reserved for the song duration display and the spaces between each segment
                     cursor_up(lines = 0)
 
                     curr_interlude_indicator:str = self.remaining_interlude_indicator
@@ -1617,7 +1616,7 @@ class spotify:
 
         currently_playing_line:str = f"Currently playing: {color(f'{self.curr_song.song_name : <{self.max_song_name_length - count_wide_characters(self.curr_song.song_name)}}', Colors.green)}   {duration_display} {indicators}"
         if self.remaining_interlude_indicator: # If the cooldown is active, ensure that there is enough sapce for the maximum size of the indicator while also adding spaces to match the length of the line with its length when a song is playing
-            currently_playing_line = f"{self.remaining_interlude_indicator : ^{max(len(remove_tags(currently_playing_line)) - len(indicators) - 1, self.COOLDOWN_BETWEEN_SONGS)}}"
+            currently_playing_line = f"{self.remaining_interlude_indicator : ^{max(len(remove_tags(currently_playing_line)) - len(indicators) - 1, self.interlude_duration)}}"
         print(f"{currently_playing_line} | Playback mode: {color(f'{self.mode.name : <10}', Colors.orange)}")
         lines_printed += 1
         

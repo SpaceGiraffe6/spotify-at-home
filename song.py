@@ -137,23 +137,23 @@ class Song:
         self.recalculate_weight(synced_songs_count = Song.parent_player.get_synced_count(self.song_name))
 
     def update_sequence(self, new_sequence:"list[str]"):
-        self.attributes_changed = (self.attributes[SongAttributes.sequenced] != bool(new_sequence))
+        self.attributes_changed = (self.attributes[SongAttributes.has_sequence] != bool(new_sequence))
 
-        if new_sequence:
-            # Update the sequenced status of songs in both the old and new lists
+        if new_sequence: # If there is at least 1 element in new_sequence
+            # Update the sequenced statuses of songs in both the old and new lists
             for song_name in set(new_sequence) - set(self.sequence):
                 Song.parent_player.songs[song_name].attributes[SongAttributes.sequenced] = True
             for song_name in set(self.sequence) - set(new_sequence):
                 Song.parent_player.songs[song_name].attributes[SongAttributes.sequenced] = False
 
-            self.sequence = new_sequence
             self.attributes[SongAttributes.has_sequence] = True
-        else:
+        else: # If new_sequence is empty
             for song_name in self.sequence:
                 Song.parent_player.songs[song_name].attributes[SongAttributes.sequenced] = False
 
-            self.sequence.clear()
             self.attributes[SongAttributes.has_sequence] = False
+
+        self.sequence = new_sequence
 
     # Pass in nothing to modifiers to only update the weight based on synced_songs_count
     # Adding a modifier that has already been added won't do anything
