@@ -547,8 +547,6 @@ class spotify:
         if "active_playlist_name" in save_file:
             self.active_playlist = self.playlists.get(save_file["active_playlist_name"])
 
-        self.playlist_started:bool = False # Flags whether self.curr_song_index has been switched to the indices in the active playlist's song_list
-
         # Play the saved curr_song first, if there is a one
         if save_file.get("curr_song", None) in self.songs.keys():
             self.pause_bookmark_index = self.song_names.index(save_file["curr_song"]) # Don't call play_next_song() here, as it will be called from another thread
@@ -706,7 +704,6 @@ class spotify:
     def activate_playlist(self, playlist_name:str, silent:bool = False):
         self.active_playlist = self.playlists[playlist_name]
         self.songs_on_cooldown = self.songs_on_cooldown[:min(len(self.active_playlist.song_names) - 1, self.cooldown_between_repeats)]
-        self.playlist_started = False
 
         if not silent:
             clear_console()
@@ -715,6 +712,7 @@ class spotify:
             self.update_ui()
     def deactivate_playlist(self, silent:bool = False):
         deactivated_playlist_name:str = self.active_playlist.name
+        self.active_playlist.curr_song_index = None
         self.active_playlist = None
 
         if not silent:
@@ -1197,7 +1195,9 @@ class spotify:
                     self.curr_song = self.songs[song_name]
                     self.curr_song_index = self.curr_song.index
 
-                    self.active_playlist.curr_song_index = available_song_names.index(song_name)
+                    if self.active_playlist:
+                        self.active_playlist.curr_song_index = available_song_names.index(song_name)
+                    
                     break
         
         # If there are no available songs
@@ -1211,8 +1211,6 @@ class spotify:
                 self.curr_song = self.songs[available_song_names[self.curr_song_index]]
         
         # This function is guaranteed to set self.curr_song_index to the current song's index in the active playlist
-        if self.active_playlist:
-            self.playlist_started = True
 
     def pause(self) -> None:
         if self.playing: # Check just in case
@@ -1277,7 +1275,6 @@ class spotify:
                 self.curr_song = song
                 self.curr_song_index = song.index
 
-                self.playlist_started = False
             else:
                 if len(self.queue) > 0:
                     song:Song = self.queue[0]
@@ -1288,7 +1285,6 @@ class spotify:
                         mode_actions[self.mode](self)
                     
                     self.remove_queued_item_at_index(0) # Silently remove the item
-                    self.playlist_started = False
                 else:
                     mode_actions[self.mode](self) # Select the next song based on the current playback mode
 
