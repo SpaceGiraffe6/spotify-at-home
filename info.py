@@ -1,4 +1,5 @@
 from enum import Enum
+from types import FunctionType as function
 
 TICK_DURATION:float = 0.5 # seconds. Best if TICK_DURATION <= 1
 TIMER_RESOLUTION:float = 0.2 # seconds
@@ -65,25 +66,6 @@ ATTRIBUTES_COLORING_ORDER:"list[SongAttributes]" = [SongAttributes.disabled, Son
 # Each song can only have up to one of the modifiers in each set at the same time
 EXCLUSIVE_MODIFIERS:"list[set[Modifiers]]" = [{Modifiers.hot, Modifiers.cold}]
 
-# class Keybind:
-#     all_keybinds:"dict[str, list]" = {}
-#     active_keybinds:set = set()
-#     def __init__(self, key:str, action:function, description:str = "", active:bool = True):
-#         self.key:str = key
-#         self.action:function = action
-#         self.active:bool = active
-#         if self.active:
-            
-
-#         if not description:
-#             description = f"Keybind for [{key}]"
-#         self.description:str = description
-    
-
-
-    # def __str__(self) -> str:
-    #     return self.description
-    # def __repr__(self) -> str:
-    #     return str(self)
-    # def __hash__(self) -> int:
-    #     return hash(self.key)
+# Utility functions
+def get_parameters(func:function) -> "tuple[str]":
+    return func.__code__.co_varnames[:func.__code__.co_argcount]

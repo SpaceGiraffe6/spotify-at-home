@@ -16,19 +16,20 @@ class Song:
     parent_player = None
 
     # File name includes the path to the file
-    def __init__(self, song_name:str, file_name:str):
+    def __init__(self, song_name:str, file_name:str, index:int):        
         self.file_name:str = file_name
         if file_name[len(file_name) - 4:] != ".wav": # Just in case
             self.file_name += ".wav"
         
         self.song_name:str = song_name
+        self.index:int = index
 
         with open_wav(file_name, "r") as file:
             self.duration:int = ceil(file.getnframes() / file.getframerate())
         self.curr_duration:int = 1
         self.start_time = None
 
-        # KEYS IN attributes MUST MATCH KEYS IN enabled_colors IN spotify.list_actions
+        # KEYS IN self.attributes MUST MATCH KEYS IN enabled_colors IN spotify.list_actions
         self.attributes:dict[SongAttributes, Union(bool, set)] = {SongAttributes.playing : False, # This attribute is updated from the play function, not from Spotify
                                                         SongAttributes.disabled : False,
                                                         SongAttributes.queued : False,
@@ -64,6 +65,12 @@ class Song:
 
     def __str__(self) -> str:
         return self.song_name
+    
+    def __hash__(self) -> int:
+        return hash(self.song_name)
+
+    def __repr__(self) -> str:
+        return f"{self.song_name}(Song)"
 
     def get_listing_colors(self) -> "list[tuple[SongAttributes, list[Colors]]]":
         if self.attributes_changed: # Return the colors that were last used for this song if none of the song's attributes have been changed since then
@@ -151,13 +158,13 @@ class Song:
     # Pass in nothing to modifiers to only update the weight based on synced_songs_count
     # Adding a modifier that has already been added won't do anything
     # synced_songs_count is always at least 1 because each song is technically always synced with itself
-    def add_modifiers(self, synced_songs_count:int = 1, *modifiers:"tuple[Modifiers]") -> None:
+    def add_modifiers(self, synced_songs_count:int = None, *modifiers:"tuple[Modifiers]") -> None:
         self.attributes[SongAttributes.modifiers] = self.attributes[SongAttributes.modifiers] | set(modifiers)
-        self.recalculate_weight(synced_songs_count)
+        self.recalculate_weight(synced_songs_count if synced_songs_count != None else 1)
 
-    def remove_modifiers(self, synced_songs_count:int = 1, *modifiers:"tuple[Modifiers]") -> None:
+    def remove_modifiers(self, synced_songs_count:int = None, *modifiers:"tuple[Modifiers]") -> None:
         self.attributes[SongAttributes.modifiers] = self.attributes[SongAttributes.modifiers] - set(modifiers)
-        self.recalculate_weight(synced_songs_count)
+        self.recalculate_weight(synced_songs_count if synced_songs_count != None else 1)
 
     def clear_modifiers(self) -> None:
         self.attributes[SongAttributes.modifiers].clear()
@@ -168,8 +175,6 @@ class Song:
         if self.attributes[SongAttributes.disabled]:
             self.weight = 0
         else:
-            synced_songs_count = max(synced_songs_count, 1)
-
             self.weight = self.BASE_WEIGHT
             for modifier in MODIFIERS_COLORING_ORDER:
                 if modifier in self.attributes[SongAttributes.modifiers]:
