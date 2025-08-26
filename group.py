@@ -4,10 +4,18 @@ from info import Modifiers
 from song import Song
 
 class SongGroup:
-    def __init__(self, songs:"Union[list, set][Song]", allow_duplicates:bool = False):
+    def __init__(self, songs:"Union[list[Song], set[Song]]", allow_duplicates:bool = False):
+        self.songs:Union[list, set][Song]
+        self.song_names:list[str]
+        self.set_songs(songs)
+        
         self.allow_duplicates:bool = allow_duplicates
-
-        if (not allow_duplicates) and (type(songs) == list): # Remove duplicates from songs in-place
+        
+    # Makes a copy of songs before filtering the list and updating self.songs and self.song_names
+    def set_songs(self, songs:"Union[list[Song], set[Song]]") -> None:
+        songs = songs.copy()
+        
+        if type(songs) == list: # Remove duplicates from songs in-place
             encountered_items:set[Song] = set()
             for i in range(len(songs) - 1, -1, -1):
                 if songs[i] in encountered_items:
@@ -15,7 +23,8 @@ class SongGroup:
                 else:
                     encountered_items.add(songs[i])
 
-        self.songs:Union[list, set][Song] = songs
+        self.songs = songs
+        self.song_names = [song.song_name for song in self.songs]
 
     def get_save_list(self) -> "list[str]":
         return [song.song_name for song in self.songs]
@@ -24,36 +33,24 @@ class Playlist(SongGroup):
     def __init__(self, name:str, songs:"list[Song]" = []):
         super().__init__(songs, allow_duplicates = False)
         self.name:str = name
-        self.song_names:list[str] = [song.song_name for song in songs]
 
         self.curr_song_index:int = None
 
-    # def add_song(self, song:Song, index:int = None) -> bool:
-    #     # If the new item is a duplicate and duplicates are not allowed
-    #     if (not self.allow_duplicates) and (song in self.songs):
-    #         return False
-    #     else:
-    #         if index == None:
-    #             self.songs.append(song)
-    #         else: # Clamp the specified index within the range of the indices of self.items
-    #             self.songs.insert(min(max(index, 0), len(self.songs)), song)
-            
-    #         return True
-    
-    # def remove_song(self, song:Song = None, index:int = None) -> bool:
-    #     if index == None:
-    #         if song in self.songs:
-    #             self.songs.remove(song)
-    #             return True
-    #         else:
-    #             return False
-
-    #     else: # If an index was provided
-    #         if index >= 0 and index < len(self.songs):
-    #             del self.songs[index]
-    #             return True
-    #         else:
-    #             return False
+    def update_songs(self, songs:"list[Song]") -> None:
+        if self.curr_song_index != None:
+            match_found:bool = False
+            # If the song name at self.curr_song_index also exists in the new song list, move the index
+            for i, song in enumerate(songs):
+                if song.song_name == self.song_names[self.curr_song_index]:
+                    self.curr_song_index = i
+                    match_found = True
+                    break
+            # Otherwise, reset self.curr_song_index to 0
+            if not match_found:
+                self.curr_song_index = 0
+        
+        # Update self.songs and self.song_names
+        self.set_songs(songs) # Superclass method
 
     def __str__(self) -> str:
         return self.name

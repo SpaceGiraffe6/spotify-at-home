@@ -416,7 +416,7 @@ class spotify:
 
         self.interlude_duration:int = max(0, self.DEFAULT_INTERLUDE_DURATION)
         self.remaining_interlude_indicator:str = None # Indicates how much time is left for the cooldown period between this song and the next one
-        self.cooldown_between_repeats:int = min(len(self.song_names) - 1, self.DEFAULT_REPEAT_COOLDOWN)
+        self.cooldown_between_repeats:int = min(len(self.song_names) - 2, self.DEFAULT_REPEAT_COOLDOWN) # Leave at least 2 songs off cooldown so shuffle mode can remain semi-randomized
         self.songs_on_cooldown:list[list[str]] = []
 
         self.encore_activated:bool = False
@@ -489,8 +489,8 @@ class spotify:
             },
             ListModes.Playlist : {
                 "header line" : "Select a command to run for {item_name}",
-                "special commands" : {"play" : {"confirmation" : None, "action" : (lambda playlist_name:self.activate_playlist(playlist_name))},
-                                    "stop" : {"confirmation" : None, "action" : self.deactivate_playlist},
+                "special commands" : {"play" : {"confirmation" : None, "action" : (lambda playlist_name:self.start_playlist(playlist_name))},
+                                    "stop" : {"confirmation" : None, "action" : self.stop_playlist},
                                     "edit" : {"confirmation" : None, "action" : (lambda playlist_name:self.edit_playlist(playlist_name))},
                                     "clear" : {"confirmation" : confirmation, "action" : (lambda playlist_name:self.clear_playlist(playlist_name))}
                                     },
@@ -541,7 +541,7 @@ class spotify:
         
         self.autoupdating:bool = False
 
-        self.playlists:dict[str, Playlist] = {playlist_name : Playlist(playlist_name, [self.songs[song_name] for song_name in song_names if song_name in self.songs]) for playlist_name, song_names in save_file.get("playlists", []).items()}
+        self.playlists:dict[str, Playlist] = {playlist_name : Playlist(playlist_name, [self.songs[song_name] for song_name in song_names if song_name in self.songs]) for playlist_name, song_names in save_file.get("playlists", {}).items()}
         self.active_playlist:Playlist = None
         # Initialize the active playlist, if there is one in the save file
         if "active_playlist_name" in save_file:
@@ -616,10 +616,10 @@ class spotify:
             header_line = f"Add an item to the list"
         self.listing_info[ListModes.ListCreation]["header line"] = header_line
 
-        result:Union(Item, ReturnFlags) = True # Initialize to True to start the first iteration of the loop
+        result:Union[Item, ReturnFlags] = True # Initialize to True to start the first iteration of the loop
         while result:
-            selected_section:tuple[str, list[Item]] = section("Current items: (select one to remove)", selected_names, items_type = items_type)
-            selection_pool_section:tuple[str, list[Item]] = section("Available selection: (select one to add)", selection_pool, items_type = items_type)
+            selected_section:tuple[str, list[Item]] = section("Current items (select one to remove):", selected_names, items_type = items_type)
+            selection_pool_section:tuple[str, list[Item]] = section("Available selection (select one to add):", selection_pool, items_type = items_type)
             result = self.list_actions(initial_results(section("Commands:", ["q", "quit", "clear"], items_type = ItemType.Command), selected_section, selection_pool_section), list_type = ListModes.ListCreation, listing_item_name = lead_item_name)
         
             if result:
@@ -701,19 +701,21 @@ class spotify:
         # self.list_actions is guaranteed to run a command
         self.list_actions(results_lists = initial_results(section("Commands: ", ["q", "quit", ("stop" if self.active_playlist and self.active_playlist.name == playlist_name else "play"), "edit", "clear"], ItemType.Command)), list_type = ListModes.Playlist, listing_item_name = playlist_name)
 
-    def activate_playlist(self, playlist_name:str, silent:bool = False):
+    def start_playlist(self, playlist_name:str, silent:bool = False):
         self.active_playlist = self.playlists[playlist_name]
-        self.songs_on_cooldown = self.songs_on_cooldown[:min(len(self.active_playlist.song_names) - 1, self.cooldown_between_repeats)]
+        self.cooldown_between_repeats = min(len(self.active_playlist.song_names) - 2, self.cooldown_between_repeats)
+        self.songs_on_cooldown = self.songs_on_cooldown[:self.cooldown_between_repeats]
 
         if not silent:
             clear_console()
-            print(f"{color(playlist_name, Colors.bold)} will begin after the current song ends")
+            print(f"{color(playlist_name, Colors.bold)} will begin after the current song")
             block_until_input()
             self.update_ui()
-    def deactivate_playlist(self, silent:bool = False):
+    def stop_playlist(self, silent:bool = False):
         deactivated_playlist_name:str = self.active_playlist.name
         self.active_playlist.curr_song_index = None
         self.active_playlist = None
+        self.cooldown_between_repeats = self.DEFAULT_REPEAT_COOLDOWN
 
         if not silent:
             clear_console()
@@ -760,8 +762,8 @@ class spotify:
             print(f"{color(playlist_name, Colors.bold)} has been deactivated and cleared")
 
         else: # If the playlist was updated with new songs
-            playlist.songs = [self.songs[song_name] for song_name in selected_names]
-            print(f"{color(playlist_name, Colors.bold)} has been updated")
+            playlist.update_songs([self.songs[song_name] for song_name in selected_names])
+            print(f"{color(playlist_name, Colors.bold)} has been saved")
 
         self.save()
 
@@ -769,9 +771,12 @@ class spotify:
         self.update_ui()
 
     def clear_playlist(self, playlist_name:str, silent:bool = False) -> None:
+        # If the cleared playlist is currently active, deactivate it first
+        if self.active_playlist and playlist_name == self.active_playlist.name:
+            self.stop_playlist(silent = True)
+            
         del self.playlists[playlist_name]
-        if self.active_playlist and self.active_playlist.name == playlist_name:
-            self.active_playlist = None
+        self.save()
         
         if not silent:
             clear_console()
@@ -780,6 +785,9 @@ class spotify:
             self.update_ui()
 
     def clear_all_playlists(self, silent:bool = False) -> None:
+        if self.active_playlist:
+            self.stop_playlist(silent = True)
+            
         self.active_playlist = None
         self.playlists.clear()
         self.save()
@@ -1135,12 +1143,16 @@ class spotify:
         enabled_song_found:bool = False
 
         if self.active_playlist:
+            if self.bookmark_index != None: # If a sequence has been completed
+                if self.song_names[self.bookmark_index] in self.active_playlist.song_names: # If the song at bookmark_index was activated from the playlist, return the playlist's curr_song_index to the index of the song that activated the sequence
+                    self.active_playlist.curr_song_index = self.active_playlist.song_names.index(self.song_names[self.bookmark_index])
+                
+                self.bookmark_index = None
+
             if self.active_playlist.curr_song_index == None: # Start the new playlist from the beginning
                 self.active_playlist.curr_song_index = 0
             else: # If the playlist has already been started, increment its index
-                if self.bookmark_index != None: # If a sequence was activated from the playlist and has been completed, return the playlist's curr_song_index to the index of the song that activated the sequence
-                    self.active_playlist.curr_song_index = self.active_playlist.song_names.index(self.song_names[self.bookmark_index])
-                    self.bookmark_index = None
+
                 self.active_playlist.curr_song_index = (self.active_playlist.curr_song_index + 1) % len(self.active_playlist.song_names)
 
             # The song index will have already been incremented by 1, if needed
@@ -1203,11 +1215,11 @@ class spotify:
         # If there are no available songs
         else: # The constructor would've caught/corrected the error if self.cooldown_between_repeats was too high
             if self.active_playlist:
-                self.active_playlist.curr_song_index = randint(0, len(available_song_names) - 1)
+                self.active_playlist.curr_song_index = randint(0, len(available_song_names) - 1) if len(available_song_names) > 0 else 0
                 self.curr_song = self.active_playlist.songs[self.active_playlist.curr_song_index]
                 self.curr_song_index = self.curr_song.index
             else:
-                self.curr_song_index = randint(0, len(available_song_names) - 1)
+                self.curr_song_index = randint(0, len(available_song_names) - 1) if len(available_song_names) > 0 else 0
                 self.curr_song = self.songs[available_song_names[self.curr_song_index]]
         
         # This function is guaranteed to set self.curr_song_index to the current song's index in the active playlist
@@ -1630,34 +1642,44 @@ class spotify:
         
         return lines_printed
     def print_next_songs(self, max_lines:int = 99) -> int:
-        # Printing items requires at least 2 lines (more lines if there are more items)
-        if max_lines <= 1 or (len(self.sequence) + len(self.queue_song_names) == 0):
-            return 0
-        else: # If there are songs in the queue/sequence
-            lines:list[str] = ["Up next: "]
-            max_index_len:int = len(str(len(self.queue_song_names)))
+        """Print the "Up next" section of the home screen.\n
+        Does nothing if both the active sequence and queue are empty.\n
+                
+        max_lines: the maximum number of rows allocated for this section.\n
+            The "Up next: " line (and the ellipses, if applicable) are guaranteed to print.\n
+        
+        Returns the total number of lines printed."""
+        
+        lines:list[str] = []
+        max_index_len:int = len(str(len(self.queue_song_names) + 1))
 
-            # Print the sequence
-            # At this point, there is guaranteed to be at least one available line
-            for sequence_song_name in self.sequence:
-                lines.append(f"{'-  ' : <{max_index_len + 2}}{color(sequence_song_name, SongAttributes.sequenced.value)}")
-            
-            # Print the queue
-            for queue_index in range(len(self.queue_song_names)):
-                lines.append(f"{f'{queue_index + 1}. ' : <{max_index_len + 2}}{color(self.queue_song_names[queue_index], SongAttributes.queued.value)}")                    
-                # Add the sequence of this queued song, if there is one
-                # get() returns an empty list if no sequence is found
-                lines.extend([f"    {color('|', Colors.faint)}{color(sequence_song_name, SongAttributes.sequenced.value)}" for sequence_song_name in self.sequences.get(self.queue_song_names[queue_index], [])])
+        # Add the sequence to lines
+        for sequence_song_name in self.sequence:
+            lines.append(f"{'-  ' : <{max_index_len + 2}}{color(sequence_song_name, SongAttributes.sequenced.value)}")
+        
+        # Add the queue to lines
+        for queue_index in range(len(self.queue_song_names)):
+            lines.append(f"{f'{queue_index + 1}. ' : <{max_index_len + 2}}{color(self.queue_song_names[queue_index], SongAttributes.queued.value)}")                    
+            # Add the sequence of this queued song, if there is one
+            # get() returns an empty list if no sequence is found
+            lines.extend([f"    {color('|', Colors.faint)}{color(sequence_song_name, SongAttributes.sequenced.value)}" for sequence_song_name in self.sequences.get(self.queue_song_names[queue_index], [])])
 
+        if len(lines) > 0:
+            print("Up next: ") # Print the header, regardless of max_lines
             # Number of printed lines will not exceed max_lines
-            if len(lines) <= max_lines:
+            if len(lines) <= max_lines - 1: # -1 to account for the "Up next: " line
                 print("\n".join(lines))
-                return len(lines)
+                return len(lines) + 1
 
             else: # If not all the lines could be fitted
-                print("\n".join(lines[:(max_lines - 1)]))
+                printable_lines:list[str] = lines[:max(0, max_lines - 2)] # -1 to account for the "Up next: " line and -1 to leave space for the ellipses
+                if len(printable_lines) > 0: # If at least 1 line can fit in addition to the ellipses
+                    print("\n".join(printable_lines))
                 print("...")
-                return max_lines
+                return len(printable_lines) + 2
+            
+        else:
+            return 0
     
     def display_help(self) -> None:
         print("Available commands (in blue)")
@@ -1783,9 +1805,9 @@ Playback modes:
     # results must be in the order of [commands, modifiers, songs]
     # results_lists can also be a tuple in the form (list of sublists' tuples, SearchResultType)
     # Header lines from self.listing_info will not print if autoclear_console == False
-    def list_actions(self, results_lists:"list[tuple[str, list[Item]]]", list_type:ListModes = ListModes.Default, listing_item_name:str = None, autoclear_console:bool = True) -> "Union(Item, bool)":
+    def list_actions(self, results_lists:"list[tuple[str, list[Item]]]", list_type:ListModes = ListModes.Default, listing_item_name:str = None, autoclear_console:bool = True) -> "Union[Item, bool]":
         return self.list_actions_recursive(results_lists, list_type = list_type, listing_item_name = listing_item_name, autoclear_console = autoclear_console, special_commands = None)
-    def list_actions_recursive(self, results_lists:"list[tuple[str, list[Item]]]", list_type:ListModes = ListModes.Default, listing_item_name:str = None, autoclear_console:bool = True, special_commands:"dict[str, dict[str, function]]" = None) -> "Union(Item, bool)":
+    def list_actions_recursive(self, results_lists:"list[tuple[str, list[Item]]]", list_type:ListModes = ListModes.Default, listing_item_name:str = None, autoclear_console:bool = True, special_commands:"dict[str, dict[str, function]]" = None) -> "Union[Item, bool]":
         if autoclear_console:
             clear_console()
         if not special_commands:
@@ -1833,9 +1855,6 @@ Playback modes:
                     elif "playlist_name" in command_arguments:
                         return special_commands[result.name]["action"](playlist_name = listing_item_name)
                     else: # If the special command doesn't take listing_item_name as an argument
-                        # Remove after testing
-                        # print(f"Error on call to command: {result.name}")
-                        # block_until_input()
                         return special_commands[result.name]["action"]()
 
                 else: # If the user doesn't confirm
@@ -2082,7 +2101,8 @@ if intro_enabled:
     print(f"spotify at home {color('Sqotify Inc., At home, ©2023 No Rights Reserved', Colors.faint)}")
     wait(1.9)
 
-DIRECTORY:str = "songs/" # Every file in this directory must be a playable wav file except the file with song_instructions_file_name
+# Every file in this directory must be a playable wav file except the file with song_instructions_file_name
+DIRECTORY:str = "C:/Users/lhy09/Songs" # Use "songs" for all commits
 songs:"dict[str, Song]" = {}
 song_names:"list[str]" = []
 alert:bool = False
@@ -2111,7 +2131,7 @@ for file_name in file_names:
             alert = True
             print(color(f"{file_name} dropped due to name overlap with existing command!", Colors.red))
         else:
-            songs[song_name] = Song(song_name, f"{DIRECTORY}{file_name}", len(song_names))
+            songs[song_name] = Song(song_name, f"{DIRECTORY}/{file_name}", len(song_names))
     finally:
         song_names.append(song_name)    
 

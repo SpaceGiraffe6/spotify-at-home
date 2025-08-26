@@ -30,7 +30,7 @@ class Song:
         self.start_time = None
 
         # KEYS IN self.attributes MUST MATCH KEYS IN enabled_colors IN spotify.list_actions
-        self.attributes:dict[SongAttributes, Union(bool, set)] = {SongAttributes.playing : False, # This attribute is updated from the play function, not from Spotify
+        self.attributes:dict[SongAttributes, Union[bool, set]] = {SongAttributes.playing : False, # This attribute is updated from the play function, not from Spotify
                                                         SongAttributes.disabled : False,
                                                         SongAttributes.queued : False,
                                                         SongAttributes.has_sequence : False,
@@ -42,21 +42,22 @@ class Song:
 
         # Each item in lyrics is a dictionary representing a line in the form of {"time" : start time of this line, "text" : the line's text}
         # lyrics will be None if no lyrics text file 
-        self.lyrics:list["dict[str, Union(int, str)]"] = None # Each lyric line will not have a newline character at the end
+        self.lyrics:list["dict[str, Union[int, str]]"] = None # Each lyric line will not have a newline character at the end
         try:
             lines:list[str] = open(f"lyrics/{self.song_name}.txt", "r").readlines() # Will error if no lyrics file with the same name as the song is found
 
             for i in range(len(lines)):
-                line:str = lines[i]
+                if len(lines[i]) > 1: # If the line is not empty
+                    line:str = lines[i]
 
-                line = line.replace("/u2669", LYRIC_PLACEHOLDER_CHARACTER) # Add in any quarter note symbols
-                if i != len(lines) - 1: # The last line of each lyrics file won't have a new line after it
-                    line = line[:len(line) - 1] # Remove the newline character at the end of the line
+                    line = line.replace("/u2669", LYRIC_PLACEHOLDER_CHARACTER) # Add in any quarter note symbols
+                    if i != len(lines) - 1: # The last line of each lyrics file won't have a newline after it
+                        line = line[:len(line) - 1] # Remove the newline character at the end of this line
 
-                if not self.lyrics:
-                    self.lyrics = []
+                    if not self.lyrics:
+                        self.lyrics = []
 
-                self.lyrics.append({"time" : to_seconds(line[:line.index(" ")]), "text" : line[line.index(" ") + 1:]})
+                    self.lyrics.append({"time" : to_seconds(line[:line.index(" ")]), "text" : line[line.index(" ") + 1:]})
         except:
             self.lyrics = None # In case something is wrong with the lyrics' formatting and only some of the lyrics were added
         
